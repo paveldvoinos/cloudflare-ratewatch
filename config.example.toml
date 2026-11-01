@@ -1,0 +1,41 @@
+# cf-ratewatch configuration. Copy to /etc/cf-ratewatch/config.toml (or pass -c).
+
+[settings]
+# The API token is read from this environment variable...
+api_token_env = "CF_API_TOKEN"
+# ...or from a file (takes precedence), e.g. a systemd credential:
+# api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
+
+# Optional: POST a summary after each run that banned or lifted something.
+# notify_format = "json" sends {"text": ..., "content": ...} (Slack, Mattermost, Discord);
+# "plain" sends the text as the body (ntfy, Gotify via proxy, anything that takes raw text).
+# notify_url = "https://ntfy.sh/my-private-topic"
+# notify_format = "plain"
+
+# Applied to every zone unless the zone overrides it.
+[defaults]
+window_minutes = 60        # count requests over the last N minutes
+threshold = 1000           # ban an IP with at least this many requests in the window
+ban_hours = 24             # the ban is lifted automatically after this
+mode = "block"             # block | managed_challenge | challenge | js_challenge
+scope = "zone"             # "account" bans the IP on every zone in the account
+exclude_cached = true      # cache hits (images, css, js a browser pulls) are not counted
+exclude_paths = []         # path prefixes that never count, e.g. your admin panel
+exclude_extensions = []    # e.g. ["jpg", "png", "css", "js"] if those are not cached
+allow = []                 # IPs/CIDRs never banned: your office, monitoring, your own servers
+ipv6_prefix = 64           # IPv6 offenders are banned per /64
+max_bans_per_run = 20      # safety cap per zone per run
+
+[[zones]]
+name = "example.com"
+exclude_paths = ["/admin"]
+
+[[zones]]
+name = "shop.example.net"
+threshold = 1500
+mode = "managed_challenge"
+allow = ["203.0.113.10"]   # added to [defaults].allow
+
+# A zone can also be given by id:
+# [[zones]]
+# id = "0123456789abcdef0123456789abcdef"

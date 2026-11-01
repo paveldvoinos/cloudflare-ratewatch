@@ -1,0 +1,16 @@
+[Unit]
+Description=cf-ratewatch: ban IPs over an hourly request limit on Cloudflare
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/cf-ratewatch/cf_ratewatch.py -c /etc/cf-ratewatch/config.toml run
+# Token as a systemd credential; set api_token_file accordingly in config.toml:
+#   api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
+LoadCredential=cf_api_token:/etc/cf-ratewatch/token
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

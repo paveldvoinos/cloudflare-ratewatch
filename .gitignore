@@ -1,0 +1,4 @@
+config.toml
+token
+__pycache__/
+*.pyc
