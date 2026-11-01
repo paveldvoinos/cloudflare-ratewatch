@@ -165,20 +165,36 @@ def _validate(cfg, label):
         raise ConfigError(f"{label}: allow: {e}") from None
 
 
+def read_secret(settings, key, credential, env_default=""):
+    """First match wins: systemd credential, <key>_file, $<key>_env."""
+    candidates = []
+    if os.environ.get("CREDENTIALS_DIRECTORY"):  # set by systemd for units with LoadCredential=
+        candidates.append(Path(os.environ["CREDENTIALS_DIRECTORY"]) / credential)
+    if settings.get(f"{key}_file"):
+        candidates.append(Path(settings[f"{key}_file"]))
+    for path in candidates:
+        try:
+            return path.read_text().strip()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            raise ConfigError(f"cannot read {path}: {e}") from None
+    env = settings.get(f"{key}_env", env_default)
+    return os.environ.get(env, "").strip() if env else ""
+
+
 def load_token(settings):
-    if settings.get("api_token_file"):
-        return Path(settings["api_token_file"]).read_text().strip()
-    env = settings.get("api_token_env", "CF_API_TOKEN")
-    token = os.environ.get(env, "").strip()
+    token = read_secret(settings, "api_token", "cf_api_token", "CF_API_TOKEN")
     if not token:
-        raise ConfigError(f"no API token: set ${env} or settings.api_token_file")
+        env = settings.get("api_token_env", "CF_API_TOKEN")
+        raise ConfigError(f"no API token: systemd credential cf_api_token, settings.api_token_file or ${env}")
     return token
 
 
 # ---------------------------------------------------------------- helpers
 
 def utcnow():
-    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    return dt.datetime.now(dt.UTC).replace(microsecond=0)
 
 
 def iso(t):
@@ -227,7 +243,7 @@ def note_until(note):
     for tok in (note or "").split():
         if tok.startswith("until="):
             try:
-                return dt.datetime.strptime(tok[6:], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+                return dt.datetime.strptime(tok[6:], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
             except ValueError:
                 return None
     return None
@@ -320,7 +336,9 @@ def write_metrics(settings, stats, now, duration):
 def _prom_labels(labels):
     if not labels:
         return ""
-    esc = lambda v: str(v).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    def esc(v):
+        return str(v).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
     return "{" + ",".join(f'{k}="{esc(v)}"' for k, v in sorted(labels.items())) + "}"
 
 
@@ -419,17 +437,11 @@ def write_influx(settings, stats, now, duration):
     body = "\n".join(influx_lines(stats, now, duration, int(settings.get("influx_top_ips", 5)))).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "text/plain; charset=utf-8", "User-Agent": f"{TAG}/{__version__}"})
-    token = _secret(settings, "influx_token")
+    token = read_secret(settings, "influx_token", "influx_token")
     if token:
         req.add_header("Authorization", f"Token {token}")
     urllib.request.urlopen(req, timeout=15).close()
 
-
-def _secret(settings, key):
-    if settings.get(f"{key}_file"):
-        return Path(settings[f"{key}_file"]).read_text().strip()
-    env = settings.get(f"{key}_env")
-    return os.environ.get(env, "").strip() if env else ""
 
 
 # ---------------------------------------------------------------- commands

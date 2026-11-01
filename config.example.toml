@@ -1,10 +1,12 @@
 # cf-ratewatch configuration. Copy to /etc/cf-ratewatch/config.toml (or pass -c).
 
 [settings]
-# The API token is read from this environment variable...
+# The Cloudflare API token is taken from the first of:
+#   1. the systemd credential cf_api_token (the shipped unit loads /etc/cf-ratewatch/token)
+#   2. api_token_file
+#   3. the environment variable named by api_token_env
+api_token_file = "/etc/cf-ratewatch/token"   # lets `sudo cf-ratewatch report` use the same token
 api_token_env = "CF_API_TOKEN"
-# ...or from a file (takes precedence), e.g. a systemd credential:
-# api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
 
 # Optional: POST a summary after each run that banned or lifted something.
 # notify_format = "json" sends {"text": ..., "content": ...} (Slack, Mattermost, Discord);
@@ -19,7 +21,7 @@ api_token_env = "CF_API_TOKEN"
 #   v2 / v3:  "http://influx:8086/api/v2/write?org=home&bucket=cloudflare"
 #   v1:       "http://influx:8086/write?db=cloudflare"   (add &u=...&p=... if auth is on)
 # influx_url = "http://influx:8086/api/v2/write?org=home&bucket=cloudflare"
-# influx_token_env = "INFLUX_TOKEN"    # or influx_token_file = "/run/credentials/cf-ratewatch.service/influx_token"
+# influx_token_env = "INFLUX_TOKEN"    # or influx_token_file; under systemd: credential influx_token
 # influx_top_ips = 5                   # top IPs per zone written each run (for the "top talkers" table)
 
 # Applied to every zone unless the zone overrides it.

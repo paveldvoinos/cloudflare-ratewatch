@@ -1,21 +1,32 @@
 [Unit]
 Description=cf-ratewatch: ban IPs over an hourly request limit on Cloudflare
+Documentation=https://github.com/paveldvoinos/cloudflare-ratewatch
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /opt/cf-ratewatch/cf_ratewatch.py -c /etc/cf-ratewatch/config.toml run
-# Token as a systemd credential; set api_token_file accordingly in config.toml:
-#   api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
+User=cf-ratewatch
+Group=cf-ratewatch
+# The API token is handed over as a systemd credential and picked up automatically.
 LoadCredential=cf_api_token:/etc/cf-ratewatch/token
-# InfluxDB token, if you use influx_url with auth (influx_token_file = ".../influx_token"):
+# InfluxDB token, if your influx_url needs one (also picked up automatically):
 #LoadCredential=influx_token:/etc/cf-ratewatch/influx_token
-# Writable /var/lib/cf-ratewatch for metrics_file; point node_exporter's
-# --collector.textfile.directory there (or symlink the .prom file into its directory).
+# /var/lib/cf-ratewatch for metrics_file, readable by node_exporter:
+# run it with --collector.textfile.directory=/var/lib/cf-ratewatch
 StateDirectory=cf-ratewatch
-DynamicUser=yes
+StateDirectoryMode=0755
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
 NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

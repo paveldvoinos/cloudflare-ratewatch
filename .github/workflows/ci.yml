@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]     # every commit on every branch; tags go through release.yml
+  pull_request:
+  workflow_call:         # release.yml runs this before packaging
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -v
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: ruff
+        run: |
+          pip install --quiet ruff==0.16.9
+          ruff check --output-format=github .
+      - name: shellcheck
+        run: shellcheck -s sh packaging/build-deb.sh packaging/postinst packaging/prerm packaging/postrm
+      - name: actionlint
+        run: |
+          pip install --quiet actionlint-py==1.7.12
+          actionlint
+      - name: systemd units
+        run: systemd-analyze verify contrib/cf-ratewatch.service contrib/cf-ratewatch.timer
+      - name: example config and dashboards parse
+        run: |
+          python -c "import tomllib; tomllib.load(open('config.example.toml', 'rb'))"
+          for f in contrib/grafana/*.json; do python -m json.tool "$f" > /dev/null; done

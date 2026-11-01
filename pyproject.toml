@@ -1,0 +1,11 @@
+[project]
+name = "cf-ratewatch"
+dynamic = ["version"]
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]

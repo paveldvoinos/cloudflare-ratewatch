@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = configure ]; then
+    if command -v systemd-sysusers >/dev/null 2>&1; then
+        systemd-sysusers cf-ratewatch.conf
+    elif ! getent passwd cf-ratewatch >/dev/null; then
+        useradd --system --user-group --no-create-home --home-dir /nonexistent \
+            --shell /usr/sbin/nologin cf-ratewatch
+    fi
+    chmod 750 /etc/cf-ratewatch
+    chgrp cf-ratewatch /etc/cf-ratewatch
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    if [ -z "$2" ]; then
+        cat <<'EOF'
+
+cf-ratewatch is installed but not running yet. To start it:
+  1. sudoedit /etc/cf-ratewatch/config.toml           # zones and thresholds
+  2. sudo install -m 600 /dev/stdin /etc/cf-ratewatch/token
+     (paste the Cloudflare API token, then Ctrl-D)
+  3. sudo cf-ratewatch report                         # top IPs, changes nothing
+  4. sudo systemctl enable --now cf-ratewatch.timer
+Logs: journalctl -u cf-ratewatch
+
+EOF
+    fi
+fi
+
+exit 0

@@ -60,7 +60,10 @@ def make_handler(fake):
             q = urllib.parse.parse_qs(u.query)
             if u.path == "/zones":
                 name = q["name"][0]
-                res = [{"id": fake.zones[name][0], "name": name, "account": {"id": fake.zones[name][1]}}] if name in fake.zones else []
+                res = []
+                if name in fake.zones:
+                    zid, acc = fake.zones[name]
+                    res = [{"id": zid, "name": name, "account": {"id": acc}}]
                 return self._send(200, {"success": True, "result": res})
             if u.path.endswith("/firewall/access_rules/rules"):
                 sp = u.path[: -len("/firewall/access_rules/rules")]
@@ -81,18 +84,22 @@ def make_handler(fake):
             if u.path == "/graphql":
                 fake.graphql_calls.append(body)
                 if fake.budget_left <= 0:
-                    return self._send(200, {"data": None, "errors": [{"message": "Rate limiter budget depleted. Please try again after 5 minutes."}]})
+                    budget = "Rate limiter budget depleted. Please try again after 5 minutes."
+                    return self._send(200, {"data": None, "errors": [{"message": budget}]})
                 fake.budget_left -= 1
                 zone = body["variables"]["zone"]
                 groups = [{"count": c, "dimensions": {"clientIP": ip}} for ip, c in fake.hits.get(zone, [])]
-                return self._send(200, {"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": groups}]}}, "errors": None})
+                data = {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": groups}]}}
+                return self._send(200, {"data": data, "errors": None})
             if u.path.endswith("/firewall/access_rules/rules"):
                 fake.post_attempts += 1
                 sp = u.path[: -len("/firewall/access_rules/rules")]
                 value = body["configuration"]["value"]
-                if any(ipaddress.ip_network(r["configuration"]["value"], strict=False) == ipaddress.ip_network(value, strict=False)
+                net = ipaddress.ip_network(value, strict=False)
+                if any(ipaddress.ip_network(r["configuration"]["value"], strict=False) == net
                        for r in fake.rules.get(sp, {}).values()):
-                    return self._send(400, {"success": False, "errors": [{"code": 10009, "message": "firewallaccessrules.api.duplicate_of_existing"}]})
+                    dup = {"code": 10009, "message": "firewallaccessrules.api.duplicate_of_existing"}
+                    return self._send(400, {"success": False, "errors": [dup]})
                 rid = fake.add_rule(sp, value, body["notes"], body["configuration"]["target"], body["mode"])
                 fake.writes.append(("POST", sp, value))
                 return self._send(200, {"success": True, "result": fake.rules[sp][rid]})
@@ -276,7 +283,8 @@ class RatewatchTest(unittest.TestCase):
         self.assertFalse(any(",rank=3 " in line for line in lines))  # influx_top_ips = 2
         bans = [line for line in lines if line.startswith("cf_ratewatch_ban,")]
         self.assertEqual(len(bans), 2)
-        self.assertTrue(bans[0].startswith("cf_ratewatch_ban,zone=example.com,mode=block,seq=1 ip=\"203.0.113.9\",hits=5000i,until=\""))
+        self.assertTrue(bans[0].startswith(
+            'cf_ratewatch_ban,zone=example.com,mode=block,seq=1 ip="203.0.113.9",hits=5000i,until="'))
         run = [line for line in lines if line.startswith("cf_ratewatch_run ")][0]
         self.assertIn("active_bans=2i,lifted=0i,errors=0i,duration=", run)
 
@@ -301,6 +309,32 @@ class RatewatchTest(unittest.TestCase):
         events = rw.cmd_run(self.cf, conf, dry=False)
         self.assertEqual(len(events), 1)
         self.assertEqual(len(self.fake.rules["/zones/Z1"]), 1)
+
+    def test_token_lookup_order(self):
+        d = tempfile.mkdtemp()
+        (Path(d) / "cf_api_token").write_text("from-credential\n")
+        f = Path(d) / "token-file"
+        f.write_text("from-file\n")
+        env = {k: os.environ.pop(k, None) for k in ("CREDENTIALS_DIRECTORY", "CF_API_TOKEN")}
+        try:
+            os.environ["CF_API_TOKEN"] = "from-env"
+            self.assertEqual(rw.load_token({}), "from-env")
+            self.assertEqual(rw.load_token({"api_token_file": str(f)}), "from-file")
+            self.assertEqual(rw.load_token({"api_token_file": "/nonexistent/token"}), "from-env")
+            os.environ["CREDENTIALS_DIRECTORY"] = d
+            self.assertEqual(rw.load_token({"api_token_file": str(f)}), "from-credential")
+            del os.environ["CF_API_TOKEN"], os.environ["CREDENTIALS_DIRECTORY"]
+            with self.assertRaises(rw.ConfigError):
+                rw.load_token({"api_token_file": "/nonexistent/token"})
+            if os.geteuid() != 0:  # root reads anything
+                f.chmod(0)
+                with self.assertRaises(rw.ConfigError):
+                    rw.load_token({"api_token_file": str(f)})
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
 
     def test_config_validation(self):
         with self.assertRaises(rw.ConfigError):

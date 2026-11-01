@@ -1,5 +1,8 @@
 # cf-ratewatch
 
+[![CI](https://github.com/paveldvoinos/cloudflare-ratewatch/actions/workflows/ci.yml/badge.svg)](https://github.com/paveldvoinos/cloudflare-ratewatch/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/paveldvoinos/cloudflare-ratewatch?include_prereleases)](https://github.com/paveldvoinos/cloudflare-ratewatch/releases)
+
 Hour-scale per-IP request limits for Cloudflare zones, **Free plan included**.
 
 Cloudflare's Free rate limiting counts requests over 10 seconds and blocks for 10 seconds,
@@ -47,13 +50,44 @@ IP caught scanning one site is blocked on all of them.
 
 ## Install
 
-Requires Python 3.11+.
+Requires Python 3.11+ (Debian 12, Ubuntu 24.04, Proxmox VE 8 and newer).
+
+### Debian / Ubuntu package
+
+Download the `.deb` from the [latest release](https://github.com/paveldvoinos/cloudflare-ratewatch/releases/latest),
+then:
+
+```sh
+sudo apt install ./cf-ratewatch_*_all.deb
+sudoedit /etc/cf-ratewatch/config.toml                       # zones and thresholds
+sudo install -m 600 /dev/stdin /etc/cf-ratewatch/token       # paste the API token, Ctrl-D
+sudo cf-ratewatch report                                     # top IPs per zone, changes nothing
+sudo systemctl enable --now cf-ratewatch.timer               # every 10 minutes
+journalctl -u cf-ratewatch -f
+```
+
+The package installs `/usr/bin/cf-ratewatch`, the systemd service and timer, a `cf-ratewatch`
+system user, and `/etc/cf-ratewatch/config.toml` as a conffile, so your edits survive upgrades.
+It does not enable the timer by itself. `apt purge` removes the config and the token; bans already
+in Cloudflare stay until they expire (or `cf-ratewatch unban` them first).
+
+### From source
 
 ```sh
 sudo git clone https://github.com/paveldvoinos/cloudflare-ratewatch /opt/cf-ratewatch
-sudo mkdir -p /etc/cf-ratewatch
-sudo cp /opt/cf-ratewatch/config.example.toml /etc/cf-ratewatch/config.toml
+sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin cf-ratewatch
+sudo install -d -m 750 -g cf-ratewatch /etc/cf-ratewatch
+sudo install -m 644 /opt/cf-ratewatch/config.example.toml /etc/cf-ratewatch/config.toml
 sudoedit /etc/cf-ratewatch/config.toml
+sudo install -m 600 /dev/stdin /etc/cf-ratewatch/token       # paste the API token, Ctrl-D
+sudo cp /opt/cf-ratewatch/contrib/cf-ratewatch.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cf-ratewatch.timer
+```
+
+or with cron instead of systemd:
+
+```cron
+*/10 * * * * CF_API_TOKEN=... /usr/bin/python3 /opt/cf-ratewatch/cf_ratewatch.py -c /etc/cf-ratewatch/config.toml run
 ```
 
 ### API token
@@ -69,34 +103,15 @@ Create a token at *My Profile → API Tokens → Create Token → Custom token* 
 
 Limit the zone resources to the zones you configure.
 
-### Try it
+The token is read from the first of: the systemd credential `cf_api_token` (the unit loads
+`/etc/cf-ratewatch/token`, so the service user never needs to read that file),
+`settings.api_token_file`, then the environment variable `settings.api_token_env`
+(default `CF_API_TOKEN`).
 
-```sh
-export CF_API_TOKEN=...
-python3 /opt/cf-ratewatch/cf_ratewatch.py report         # top IPs per zone, changes nothing
-python3 /opt/cf-ratewatch/cf_ratewatch.py --dry-run run  # what it would ban
-```
+### Before enabling it
 
-Start with `report` for a few days to see what normal peaks look like on your zones, then set the
-thresholds well above them.
-
-### Schedule
-
-systemd (the token is passed as a credential):
-
-```sh
-sudo install -m 600 /dev/stdin /etc/cf-ratewatch/token <<< "your-token"
-# in config.toml: api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
-sudo cp /opt/cf-ratewatch/contrib/cf-ratewatch.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now cf-ratewatch.timer
-journalctl -u cf-ratewatch -f
-```
-
-or cron:
-
-```cron
-*/10 * * * * CF_API_TOKEN=... /usr/bin/python3 /opt/cf-ratewatch/cf_ratewatch.py -c /etc/cf-ratewatch/config.toml run
-```
+Run `report` for a few days to see what normal peaks look like on your zones, then set the
+thresholds well above them. `--dry-run run` shows what would be banned without banning.
 
 ## Configuration
 
@@ -209,13 +224,25 @@ Config path: `-c`, else `$CF_RATEWATCH_CONFIG`, else `/etc/cf-ratewatch/config.t
 - **Repeat offenders.** Blocked requests still count, so an IP that keeps hammering during its ban
   is banned again right after the ban expires.
 
-## Tests
+## Development
 
 ```sh
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests        # fake Cloudflare API on localhost, no token or network
+ruff check .
+packaging/build-deb.sh                       # dist/cf-ratewatch_<version>_all.deb
 ```
 
-The tests run against a fake Cloudflare API on localhost; no token or network needed.
+CI runs the tests (Python 3.11–3.13) and the linters (ruff, shellcheck, actionlint,
+`systemd-analyze verify`) on every push and pull request.
+
+To release, set `__version__` in `cf_ratewatch.py`, commit, and push a matching tag:
+
+```sh
+git tag v0.3.0 && git push origin v0.3.0      # v0.3.0-rc1 makes a pre-release
+```
+
+The release workflow runs CI again, builds the `.deb`, checks it with lintian, installs and purges
+it on a clean runner, then creates the GitHub release with the package and `SHA256SUMS` attached.
 
 ## License
 

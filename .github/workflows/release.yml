@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]         # v1.2.0, or v1.2.0-rc1 for a pre-release
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deb:
+    name: Build .deb
+    needs: ci
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches __version__
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if ! grep -qx "__version__ = \"$v\"" cf_ratewatch.py; then
+            echo "::error::tag $GITHUB_REF_NAME does not match __version__ in cf_ratewatch.py"
+            exit 1
+          fi
+      - name: Build
+        run: packaging/build-deb.sh "$GITHUB_REF_NAME"
+      - name: Lintian
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lintian > /dev/null
+          lintian --fail-on error,warning --info dist/*.deb
+      - name: Install, verify, purge
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          cf-ratewatch --version
+          systemd-analyze verify /usr/lib/systemd/system/cf-ratewatch.service /usr/lib/systemd/system/cf-ratewatch.timer
+          getent passwd cf-ratewatch
+          sudo dpkg --verify cf-ratewatch
+          sudo apt-get purge -y cf-ratewatch
+          test ! -e /etc/cf-ratewatch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: deb
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: dist
+      - name: Create the release and attach the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          sha256sum ./*.deb > SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" ./*.deb SHA256SUMS --clobber
+          else
+            prerelease=""
+            case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+            gh release create "$GITHUB_REF_NAME" ./*.deb SHA256SUMS \
+              --title "$GITHUB_REF_NAME" --generate-notes $prerelease
+          fi
