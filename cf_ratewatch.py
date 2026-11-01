@@ -16,14 +16,16 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 TAG = "cf-ratewatch"
 API = os.environ.get("CF_API_BASE", "https://api.cloudflare.com/client/v4").rstrip("/")
 log = logging.getLogger(TAG)
@@ -295,20 +297,161 @@ def notify(settings, events):
         log.warning("notify failed: %s", e)
 
 
+# ---------------------------------------------------------------- metrics
+
+PROM_SAMPLE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)')
+PROM_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+
+
+def write_metrics(settings, stats, now, duration):
+    """Metrics are best effort: a failing exporter never fails the run."""
+    if settings.get("metrics_file"):
+        try:
+            write_prom(settings["metrics_file"], stats, now, duration)
+        except Exception as e:
+            log.warning("metrics_file: %s", e)
+    if settings.get("influx_url"):
+        try:
+            write_influx(settings, stats, now, duration)
+        except Exception as e:
+            log.warning("influx: %s", e)
+
+
+def _prom_labels(labels):
+    if not labels:
+        return ""
+    esc = lambda v: str(v).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    return "{" + ",".join(f'{k}="{esc(v)}"' for k, v in sorted(labels.items())) + "}"
+
+
+def _prom_counters(path):
+    """Previous *_total values, so counters keep growing across oneshot runs."""
+    out = {}
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return out
+    for line in text.splitlines():
+        m = PROM_SAMPLE.match(line)
+        if m and m.group(1).endswith("_total"):
+            labels = tuple(sorted(PROM_LABEL.findall(m.group(2) or "")))
+            try:
+                out[(m.group(1), labels)] = float(m.group(3))
+            except ValueError:
+                pass
+    return out
+
+
+def write_prom(path, stats, now, duration):
+    prev = _prom_counters(path)
+    zones = stats["zones"]
+    lines = []
+
+    def metric(name, help_, typ, samples):
+        lines.append(f"# HELP {name} {help_}")
+        lines.append(f"# TYPE {name} {typ}")
+        for labels, value in samples:
+            if typ == "counter":
+                value += prev.get((name, tuple(sorted(labels.items()))), 0)
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            lines.append(f"{name}{_prom_labels(labels)} {value}")
+
+    ok = {z: d for z, d in zones.items() if d["ok"]}
+    metric("cf_ratewatch_top_requests", "Highest request count from a single IP in the window.", "gauge",
+           [({"zone": z}, d["top"]) for z, d in ok.items()])
+    metric("cf_ratewatch_threshold", "Configured ban threshold per window.", "gauge",
+           [({"zone": z}, d["threshold"]) for z, d in zones.items()])
+    metric("cf_ratewatch_ips_over_threshold", "IPs at or over the threshold in this run.", "gauge",
+           [({"zone": z}, d["over"]) for z, d in ok.items()])
+    metric("cf_ratewatch_zone_query_success", "1 if the analytics query for the zone succeeded.", "gauge",
+           [({"zone": z}, d["ok"]) for z, d in zones.items()])
+    metric("cf_ratewatch_active_bans", "IP Access Rules currently managed by cf-ratewatch.", "gauge",
+           [({"scope": s}, n) for s, n in sorted(stats["active"].items())])
+    metric("cf_ratewatch_bans_total", "Bans created.", "counter",
+           [({"zone": z}, d["bans"]) for z, d in zones.items()])
+    metric("cf_ratewatch_bans_lifted_total", "Expired bans lifted.", "counter", [({}, stats["lifted"])])
+    metric("cf_ratewatch_errors_total", "API errors.", "counter", [({}, stats["errors"])])
+    metric("cf_ratewatch_run_success", "1 if the last run had no errors.", "gauge",
+           [({}, 0 if stats["errors"] else 1)])
+    metric("cf_ratewatch_last_run_timestamp_seconds", "Unix time of the last run.", "gauge",
+           [({}, int(now.timestamp()))])
+    metric("cf_ratewatch_run_duration_seconds", "Duration of the last run.", "gauge",
+           [({}, round(duration, 3))])
+
+    tmp = f"{path}.tmp"
+    Path(tmp).write_text("\n".join(lines) + "\n")
+    os.replace(tmp, path)  # atomic: node_exporter never reads a half-written file
+
+
+def _lp_tag(v):
+    return str(v).replace(",", "\\,").replace("=", "\\=").replace(" ", "\\ ")
+
+
+def _lp_str(v):
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def influx_lines(stats, now, duration, top_n=5):
+    ts = int(now.timestamp())
+    lines = []
+    for z, d in stats["zones"].items():
+        fields = [f"query_ok={'true' if d['ok'] else 'false'}", f"threshold={int(d['threshold'])}i"]
+        if d["ok"]:
+            fields += [f"top_requests={d['top']}i", f"over_threshold={d['over']}i", f"bans={d['bans']}i"]
+        lines.append(f"cf_ratewatch_zone,zone={_lp_tag(z)} {','.join(fields)} {ts}")
+    for z, hits in stats["top"].items():
+        for rank, (ip, count) in enumerate(hits[:top_n], 1):
+            lines.append(f"cf_ratewatch_top,zone={_lp_tag(z)},rank={rank} ip={_lp_str(ip)},requests={count}i {ts}")
+    for seq, b in enumerate(stats["bans"], 1):  # seq keeps several bans in one run from overwriting each other
+        lines.append(f"cf_ratewatch_ban,zone={_lp_tag(b['zone'])},mode={_lp_tag(b['mode'])},seq={seq} "
+                     f"ip={_lp_str(b['value'])},hits={b['hits']}i,until={_lp_str(b['until'])} {ts}")
+    lines.append(f"cf_ratewatch_run active_bans={sum(stats['active'].values())}i,lifted={stats['lifted']}i,"
+                 f"errors={stats['errors']}i,duration={duration:.3f} {ts}")
+    return lines
+
+
+def write_influx(settings, stats, now, duration):
+    parts = urllib.parse.urlsplit(settings["influx_url"])
+    query = dict(urllib.parse.parse_qsl(parts.query))
+    query["precision"] = "s"  # timestamps below are in seconds
+    url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+    body = "\n".join(influx_lines(stats, now, duration, int(settings.get("influx_top_ips", 5)))).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "text/plain; charset=utf-8", "User-Agent": f"{TAG}/{__version__}"})
+    token = _secret(settings, "influx_token")
+    if token:
+        req.add_header("Authorization", f"Token {token}")
+    urllib.request.urlopen(req, timeout=15).close()
+
+
+def _secret(settings, key):
+    if settings.get(f"{key}_file"):
+        return Path(settings[f"{key}_file"]).read_text().strip()
+    env = settings.get(f"{key}_env")
+    return os.environ.get(env, "").strip() if env else ""
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_run(cf, conf, dry):
-    now = utcnow()
+    started, now = time.monotonic(), utcnow()
     zones = resolve_all(cf, conf)
-    events, managed = [], {}
+    events, managed, labels = [], {}, {}
+    stats = {"zones": {}, "top": {}, "bans": [], "lifted": 0, "active": {},
+             "errors": len(conf["zones"]) - len(zones)}  # unresolvable zones count as errors
+    for cfg, zid, zname, acc in zones:
+        labels[scope_path(cfg, zid, acc)] = f"account:{acc}" if cfg["scope"] == "account" else f"zone:{zname}"
+        stats["zones"][zname] = {"ok": 0, "threshold": cfg["threshold"], "top": 0, "over": 0, "bans": 0}
 
     # 1. lift expired bans
-    for sp in {scope_path(c, zid, acc) for c, zid, _, acc in zones}:
+    for sp in labels:
         try:
             managed[sp] = list_managed(cf, sp)
         except CFError as e:
             log.error("%s: cannot list access rules: %s", sp, e)
             managed[sp] = None
+            stats["errors"] += 1
             continue
         for r in list(managed[sp]):
             until = note_until(r.get("notes"))
@@ -322,8 +465,10 @@ def cmd_run(cf, conf, dry):
                     cf.rest("DELETE", f"{sp}/firewall/access_rules/rules/{r['id']}")
                 except CFError as e:
                     log.error("cannot lift ban on %s: %s", value, e)
+                    stats["errors"] += 1
                     continue
                 log.info("lifted ban on %s", value)
+                stats["lifted"] += 1
             managed[sp].remove(r)
             events.append(f"unban {value}")
 
@@ -337,11 +482,16 @@ def cmd_run(cf, conf, dry):
             hits = top_ips(cf, zid, cfg, now)
         except CFError as e:
             log.error("%s: analytics query failed: %s", zname, e)
+            stats["errors"] += 1
             if e.has("budget", "rate limit"):
                 log.warning("analytics budget exhausted; skipping the remaining zones this run")
                 break
             continue
         log.debug("%s: top %s", zname, hits[:5])
+        zstat = stats["zones"][zname]
+        zstat.update(ok=1, top=hits[0][1] if hits else 0,
+                     over=sum(1 for _, c in hits if c >= cfg["threshold"]))
+        stats["top"][zname] = hits
         bans = 0
         for ip, count in hits:
             if count < cfg["threshold"]:
@@ -370,15 +520,21 @@ def cmd_run(cf, conf, dry):
                         banned.add(norm(value))
                         continue
                     log.error("%s: cannot ban %s: %s", zname, value, e)
+                    stats["errors"] += 1
                     continue
                 managed[sp].append(res["result"])
                 log.info(msg)
+                zstat["bans"] += 1
+                stats["bans"].append({"zone": zname, "value": value, "mode": cfg["mode"],
+                                      "hits": count, "until": iso(until)})
             banned.add(norm(value))
             bans += 1
             events.append(msg)
 
+    stats["active"] = {labels[sp]: len(rules) for sp, rules in managed.items() if rules is not None}
     if not dry:
         notify(conf["settings"], events)
+        write_metrics(conf["settings"], stats, now, time.monotonic() - started)
     return events
 
 

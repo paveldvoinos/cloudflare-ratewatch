@@ -39,6 +39,7 @@ Each run:
    per zone. Cache hits and paths you exclude are not counted.
 3. Creates an IP Access Rule (`block`, or a challenge) for every IP at or over the threshold,
    except allowlisted ones, up to `max_bans_per_run` per zone.
+4. Writes metrics for Prometheus and/or InfluxDB, if configured (see [Metrics](#metrics-and-grafana)).
 
 IP Access Rules do not use up your custom rule slots (Free: 5), and you can have up to 50,000 of
 them. They can apply to one zone or, with `scope = "account"`, to every zone in the account, so an
@@ -115,6 +116,70 @@ per zone. `allow` is merged: the zone's own list is added to the default one.
 | `allow` | [] | IPs/CIDRs that are never banned |
 | `ipv6_prefix` | 64 | IPv6 ban granularity: 32, 48, 64 or 128 |
 | `max_bans_per_run` | 20 | Safety cap per zone per run |
+
+## Metrics and Grafana
+
+Optional, and either or both. Metrics are written after every run (not in `--dry-run`); a failing
+metrics target is logged and never fails the run.
+
+The most useful panel is **top single-IP requests per window vs threshold** per zone: it shows how
+close normal traffic gets to the threshold, which is what you need to tune it.
+
+### Prometheus
+
+```toml
+[settings]
+metrics_file = "/var/lib/cf-ratewatch/cf_ratewatch.prom"
+```
+
+The file is for node_exporter's
+[textfile collector](https://github.com/prometheus/node_exporter#textfile-collector):
+run node_exporter with `--collector.textfile.directory=/var/lib/cf-ratewatch`, or symlink the file
+into the directory you already use. The systemd unit creates `/var/lib/cf-ratewatch` via
+`StateDirectory`. Counters (`*_total`) are carried over from the previous file, so they keep growing
+across runs and `increase()` works.
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `cf_ratewatch_top_requests` | gauge | zone |
+| `cf_ratewatch_threshold` | gauge | zone |
+| `cf_ratewatch_ips_over_threshold` | gauge | zone |
+| `cf_ratewatch_zone_query_success` | gauge | zone |
+| `cf_ratewatch_active_bans` | gauge | scope (`zone:<name>` or `account:<id>`) |
+| `cf_ratewatch_bans_total` | counter | zone |
+| `cf_ratewatch_bans_lifted_total` | counter | |
+| `cf_ratewatch_errors_total` | counter | |
+| `cf_ratewatch_run_success` | gauge | |
+| `cf_ratewatch_last_run_timestamp_seconds` | gauge | |
+| `cf_ratewatch_run_duration_seconds` | gauge | |
+
+IPs are never used as labels. A useful alert: `time() - cf_ratewatch_last_run_timestamp_seconds > 1800`.
+
+### InfluxDB
+
+```toml
+[settings]
+influx_url = "http://influx:8086/api/v2/write?org=home&bucket=cloudflare"   # v1: /write?db=cloudflare
+influx_token_env = "INFLUX_TOKEN"
+```
+
+One point per measurement per run, timestamped at the run:
+
+| Measurement | Tags | Fields |
+| --- | --- | --- |
+| `cf_ratewatch_zone` | zone | `top_requests`, `threshold`, `over_threshold`, `bans`, `query_ok` |
+| `cf_ratewatch_top` | zone, rank | `ip`, `requests` (top `influx_top_ips` IPs, default 5) |
+| `cf_ratewatch_ban` | zone, mode, seq | `ip`, `hits`, `until` (one point per ban) |
+| `cf_ratewatch_run` | | `active_bans`, `lifted`, `errors`, `duration` |
+
+IPs are fields, not tags, so they don't grow series cardinality.
+
+### Dashboards
+
+Import [`contrib/grafana/prometheus.json`](contrib/grafana/prometheus.json) or
+[`contrib/grafana/influxdb.json`](contrib/grafana/influxdb.json) (*Dashboards → New → Import*) and
+pick your data source. The InfluxDB dashboard uses InfluxQL, which InfluxDB 1.x speaks natively;
+on 2.x add a DBRP mapping for the bucket, or use an InfluxQL data source on 3.x.
 
 ## Commands
 

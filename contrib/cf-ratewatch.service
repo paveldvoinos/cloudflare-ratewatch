@@ -9,6 +9,11 @@ ExecStart=/usr/bin/python3 /opt/cf-ratewatch/cf_ratewatch.py -c /etc/cf-ratewatc
 # Token as a systemd credential; set api_token_file accordingly in config.toml:
 #   api_token_file = "/run/credentials/cf-ratewatch.service/cf_api_token"
 LoadCredential=cf_api_token:/etc/cf-ratewatch/token
+# InfluxDB token, if you use influx_url with auth (influx_token_file = ".../influx_token"):
+#LoadCredential=influx_token:/etc/cf-ratewatch/influx_token
+# Writable /var/lib/cf-ratewatch for metrics_file; point node_exporter's
+# --collector.textfile.directory there (or symlink the .prom file into its directory).
+StateDirectory=cf-ratewatch
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

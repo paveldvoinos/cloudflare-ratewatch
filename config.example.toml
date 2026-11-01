@@ -12,6 +12,16 @@ api_token_env = "CF_API_TOKEN"
 # notify_url = "https://ntfy.sh/my-private-topic"
 # notify_format = "plain"
 
+# Optional metrics, written after every run (not in --dry-run). Either, both or none.
+# Prometheus: a file for node_exporter's textfile collector (written atomically).
+# metrics_file = "/var/lib/cf-ratewatch/cf_ratewatch.prom"
+# InfluxDB: the write endpoint. precision=s is added automatically.
+#   v2 / v3:  "http://influx:8086/api/v2/write?org=home&bucket=cloudflare"
+#   v1:       "http://influx:8086/write?db=cloudflare"   (add &u=...&p=... if auth is on)
+# influx_url = "http://influx:8086/api/v2/write?org=home&bucket=cloudflare"
+# influx_token_env = "INFLUX_TOKEN"    # or influx_token_file = "/run/credentials/cf-ratewatch.service/influx_token"
+# influx_top_ips = 5                   # top IPs per zone written each run (for the "top talkers" table)
+
 # Applied to every zone unless the zone overrides it.
 [defaults]
 window_minutes = 60        # count requests over the last N minutes

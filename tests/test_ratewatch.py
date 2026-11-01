@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -24,6 +25,7 @@ class FakeCF:
         self.budget_left = 99
         self.next_id = 1
         self.post_attempts = 0
+        self.influx = []
 
     def add_rule(self, sp, value, notes, target="ip", mode="block"):
         if target == "ip_range" and ":" in value:  # Cloudflare stores IPv6 ranges fully expanded
@@ -68,7 +70,14 @@ def make_handler(fake):
 
         def do_POST(self):
             u = urllib.parse.urlparse(self.path)
-            body = self._body()
+            body = None if u.path in ("/api/v2/write", "/write") else self._body()
+            if u.path in ("/api/v2/write", "/write"):
+                fake.influx.append({"path": u.path, "query": urllib.parse.parse_qs(u.query),
+                                    "auth": self.headers.get("Authorization"),
+                                    "body": self.rfile.read(int(self.headers["Content-Length"])).decode()})
+                self.send_response(204)
+                self.end_headers()
+                return
             if u.path == "/graphql":
                 fake.graphql_calls.append(body)
                 if fake.budget_left <= 0:
@@ -208,6 +217,90 @@ class RatewatchTest(unittest.TestCase):
         self.fake.add_rule("/zones/Z1", "2001:db8:1:2::/64", self.note(+3), target="ip_range")
         rw.cmd_unban(self.cf, self.conf, "2001:db8:1:2::abcd", dry=False)
         self.assertEqual(self.fake.rules["/zones/Z1"], {})
+
+    def _metrics_conf(self, extra):
+        return rw.load_config(write_config(extra + CONFIG))
+
+    def test_prometheus_textfile_and_persisted_counters(self):
+        prom = os.path.join(tempfile.mkdtemp(), "cf_ratewatch.prom")
+        conf = self._metrics_conf(f'[settings]\nmetrics_file = "{prom}"\n')
+        self.fake.hits["Z1"] = [("203.0.113.9", 5000), ("198.51.100.4", 900)]
+        self.fake.add_rule("/zones/Z1", "198.51.100.200", self.note(-1))
+        rw.cmd_run(self.cf, conf, dry=False)
+        text = Path(prom).read_text()
+        self.assertIn('cf_ratewatch_top_requests{zone="example.com"} 5000', text)
+        self.assertIn('cf_ratewatch_ips_over_threshold{zone="example.com"} 1', text)
+        self.assertIn('cf_ratewatch_bans_total{zone="example.com"} 1', text)
+        self.assertIn('cf_ratewatch_bans_lifted_total 1', text)
+        self.assertIn('cf_ratewatch_active_bans{scope="zone:example.com"} 1', text)
+        self.assertIn('cf_ratewatch_active_bans{scope="account:A1"} 0', text)
+        self.assertIn('cf_ratewatch_run_success 1', text)
+        # second run: a new offender; counters must add up, not reset
+        self.fake.hits["Z1"] = [("203.0.113.10", 7000)]
+        rw.cmd_run(self.cf, conf, dry=False)
+        text = Path(prom).read_text()
+        self.assertIn('cf_ratewatch_bans_total{zone="example.com"} 2', text)
+        self.assertIn('cf_ratewatch_bans_lifted_total 1', text)
+        self.assertIn('cf_ratewatch_top_requests{zone="example.com"} 7000', text)
+        self.assertFalse(os.path.exists(prom + ".tmp"))
+
+    def test_failed_zone_query_is_reported(self):
+        prom = os.path.join(tempfile.mkdtemp(), "m.prom")
+        conf = self._metrics_conf(f'[settings]\nmetrics_file = "{prom}"\n')
+        self.fake.budget_left = 0
+        rw.cmd_run(self.cf, conf, dry=False)
+        text = Path(prom).read_text()
+        self.assertIn('cf_ratewatch_zone_query_success{zone="example.com"} 0', text)
+        self.assertIn('cf_ratewatch_run_success 0', text)
+        self.assertIn('cf_ratewatch_errors_total 1', text)
+        self.assertNotIn('cf_ratewatch_top_requests{', text)
+
+    def test_influx_line_protocol(self):
+        os.environ["TEST_INFLUX_TOKEN"] = "secret-token"
+        conf = self._metrics_conf(
+            f'[settings]\ninflux_url = "{rw.API}/api/v2/write?org=home&bucket=cf"\n'
+            'influx_token_env = "TEST_INFLUX_TOKEN"\ninflux_top_ips = 2\n')
+        self.fake.hits["Z1"] = [("203.0.113.9", 5000), ("203.0.113.10", 4000), ("198.51.100.4", 900)]
+        rw.cmd_run(self.cf, conf, dry=False)
+        self.assertEqual(len(self.fake.influx), 1)
+        w = self.fake.influx[0]
+        self.assertEqual(w["query"]["precision"], ["s"])
+        self.assertEqual(w["query"]["bucket"], ["cf"])
+        self.assertEqual(w["auth"], "Token secret-token")
+        lines = w["body"].splitlines()
+        ts = lines[0].rsplit(" ", 1)[1]
+        self.assertTrue(all(line.rsplit(" ", 1)[1] == ts for line in lines))
+        self.assertIn(f"cf_ratewatch_zone,zone=example.com query_ok=true,threshold=1000i,top_requests=5000i,"
+                      f"over_threshold=2i,bans=2i {ts}", lines)
+        self.assertIn(f'cf_ratewatch_top,zone=example.com,rank=2 ip="203.0.113.10",requests=4000i {ts}', lines)
+        self.assertFalse(any(",rank=3 " in line for line in lines))  # influx_top_ips = 2
+        bans = [line for line in lines if line.startswith("cf_ratewatch_ban,")]
+        self.assertEqual(len(bans), 2)
+        self.assertTrue(bans[0].startswith("cf_ratewatch_ban,zone=example.com,mode=block,seq=1 ip=\"203.0.113.9\",hits=5000i,until=\""))
+        run = [line for line in lines if line.startswith("cf_ratewatch_run ")][0]
+        self.assertIn("active_bans=2i,lifted=0i,errors=0i,duration=", run)
+
+    def test_line_protocol_escaping(self):
+        stats = {"zones": {"a b,c=d": {"ok": 0, "threshold": 5, "top": 0, "over": 0, "bans": 0}},
+                 "top": {}, "bans": [{"zone": "z", "mode": "block", "value": 'x"y\\z', "hits": 1, "until": "u"}],
+                 "lifted": 0, "errors": 0, "active": {}}
+        lines = rw.influx_lines(stats, rw.utcnow(), 0.5)
+        self.assertTrue(lines[0].startswith(r"cf_ratewatch_zone,zone=a\ b\,c\=d query_ok=false,threshold=5i "))
+        self.assertIn(r'ip="x\"y\\z"', lines[1])
+
+    def test_dry_run_writes_no_metrics(self):
+        prom = os.path.join(tempfile.mkdtemp(), "m.prom")
+        conf = self._metrics_conf(f'[settings]\nmetrics_file = "{prom}"\n')
+        rw.cmd_run(self.cf, conf, dry=True)
+        self.assertFalse(os.path.exists(prom))
+
+    def test_broken_metrics_target_does_not_break_run(self):
+        conf = self._metrics_conf('[settings]\nmetrics_file = "/nonexistent-dir/x.prom"\n'
+                                  'influx_url = "http://127.0.0.1:9/write?db=x"\n')
+        self.fake.hits["Z1"] = [("203.0.113.9", 5000)]
+        events = rw.cmd_run(self.cf, conf, dry=False)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(len(self.fake.rules["/zones/Z1"]), 1)
 
     def test_config_validation(self):
         with self.assertRaises(rw.ConfigError):
