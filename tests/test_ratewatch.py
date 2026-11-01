@@ -372,6 +372,8 @@ class RatewatchTest(unittest.TestCase):
             "empty extension": zone + 'exclude_extensions = ["."]\n',
             "exclude_cached as a string": zone + 'exclude_cached = "false"\n',
             "threshold = true": zone + "threshold = true\n",
+            "threshold = nan": zone + "threshold = nan\n",
+            "ban_hours = inf": zone + "ban_hours = inf\n",
             "top not whole": zone + "top = 2.5\n",
             "allow as a string": zone + 'allow = "192.0.2.0/24"\n',
             "allow in defaults as a string": '[defaults]\nallow = "192.0.2.0/24"\n' + zone,
