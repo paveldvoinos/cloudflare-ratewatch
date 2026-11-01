@@ -336,6 +336,33 @@ class RatewatchTest(unittest.TestCase):
                 if v is not None:
                     os.environ[k] = v
 
+    def test_version_and_help_never_touch_the_config(self):
+        from unittest import mock
+        with mock.patch.object(rw, "default_config_path", side_effect=AssertionError("config touched")):
+            for argv in (["--version"], ["--help"]):
+                with self.assertRaises(SystemExit) as cm, mock.patch("sys.stdout"):
+                    rw.main(argv)
+                self.assertEqual(cm.exception.code, 0)
+
+    def test_default_config_path_survives_unreadable_etc(self):
+        from unittest import mock
+        os.environ.pop("CF_RATEWATCH_CONFIG", None)
+        with mock.patch.object(rw.Path, "exists", side_effect=PermissionError(13, "Permission denied")):
+            self.assertEqual(rw.default_config_path(), "/etc/cf-ratewatch/config.toml")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read everything")
+    def test_unreadable_config_is_a_config_error(self):
+        d = tempfile.mkdtemp()
+        path = Path(d) / "config.toml"
+        path.write_text('[[zones]]\nname = "x"\n')
+        os.chmod(d, 0)
+        try:
+            with self.assertRaisesRegex(rw.ConfigError, "permission denied"):
+                rw.load_config(str(path))
+            self.assertEqual(rw.main(["-c", str(path), "report"]), 2)
+        finally:
+            os.chmod(d, 0o700)
+
     def test_config_validation(self):
         with self.assertRaises(rw.ConfigError):
             rw.load_config(write_config('[[zones]]\nname = "x"\ntreshold = 5\n'))

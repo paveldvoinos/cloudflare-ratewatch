@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 TAG = "cf-ratewatch"
 API = os.environ.get("CF_API_BASE", "https://api.cloudflare.com/client/v4").rstrip("/")
 log = logging.getLogger(TAG)
@@ -117,6 +117,11 @@ def load_config(path):
             raw = tomllib.load(f)
     except FileNotFoundError:
         raise ConfigError(f"config not found: {path}") from None
+    except PermissionError:
+        raise ConfigError(f"cannot read {path}: permission denied "
+                          "(run it with sudo, or as a member of the cf-ratewatch group)") from None
+    except OSError as e:
+        raise ConfigError(f"cannot read {path}: {e.strerror}") from None
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from None
 
@@ -599,12 +604,16 @@ def default_config_path():
     if env:
         return env
     etc = Path("/etc/cf-ratewatch/config.toml")
-    return str(etc) if etc.exists() else "config.toml"
+    try:
+        return str(etc) if etc.exists() else "config.toml"
+    except OSError:  # /etc/cf-ratewatch exists but this user may not read it; load_config says so
+        return str(etc)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog=TAG, description="Hour-scale per-IP limits for Cloudflare zones.")
-    ap.add_argument("-c", "--config", default=default_config_path(), help="path to config.toml")
+    ap.add_argument("-c", "--config", help="path to config.toml (default: $CF_RATEWATCH_CONFIG, "
+                    "/etc/cf-ratewatch/config.toml, ./config.toml)")
     ap.add_argument("-n", "--dry-run", action="store_true", help="log what would change, change nothing")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -619,7 +628,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
     try:
-        conf = load_config(args.config)
+        conf = load_config(args.config or default_config_path())
         cf = Cloudflare(load_token(conf["settings"]))
         cmd = args.cmd or "run"
         if cmd == "run":
