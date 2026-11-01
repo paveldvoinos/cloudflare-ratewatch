@@ -34,8 +34,22 @@ jobs:
           lintian --fail-on error,warning --info dist/*.deb
       - name: Install, verify, purge
         run: |
+          expect_exit() {  # expect_exit CODE TEXT CMD...: CMD exits with CODE and prints TEXT
+            code=$1 text=$2; shift 2
+            out=$("$@" 2>&1) && rc=0 || rc=$?
+            echo "$ $* -> $rc: $out"
+            if [ "$rc" != "$code" ] || ! grep -q "$text" <<< "$out"; then
+              echo "::error::expected exit $code and '$text' from: $*"
+              exit 1
+            fi
+          }
           sudo apt-get install -y ./dist/*.deb
+          # as the unprivileged runner user, who cannot read /etc/cf-ratewatch
           cf-ratewatch --version
+          cf-ratewatch --help > /dev/null
+          expect_exit 2 "permission denied" cf-ratewatch report
+          # as root: the config loads, and the missing token is reported cleanly
+          expect_exit 2 "no API token" sudo cf-ratewatch report
           systemd-analyze verify /usr/lib/systemd/system/cf-ratewatch.service /usr/lib/systemd/system/cf-ratewatch.timer
           getent passwd cf-ratewatch
           sudo dpkg --verify cf-ratewatch
