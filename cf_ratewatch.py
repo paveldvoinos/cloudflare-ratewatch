@@ -16,6 +16,7 @@ import difflib
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -182,8 +183,8 @@ def config_from_dict(raw):
     return {"settings": settings, "zones": zones}
 
 
-def _is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)  # TOML true is not 1
+def _is_number(v):  # TOML true is not 1, and TOML inf/nan are not limits
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _is_integer(v):
