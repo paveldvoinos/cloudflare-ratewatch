@@ -171,6 +171,25 @@ per zone. `allow` is merged: the zone's own list is added to the default one.
 | `allow` | [] | IPs/CIDRs that are never banned |
 | `ipv6_prefix` | 64 | IPv6 ban granularity: 32, 48, 64 or 128 |
 | `max_bans_per_run` | 20 | Safety cap per zone per run |
+| `top` | 25 | How many top IPs to fetch per zone |
+
+`[settings]` (all optional):
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `api_token_file` | path | Cloudflare API token file (after the systemd credential) |
+| `api_token_env` | name | Environment variable with the token (default `CF_API_TOKEN`) |
+| `notify_url` | URL | Webhook called after a run that banned or lifted something |
+| `notify_format` | `json` or `plain` | `json`: `{"text", "content"}` (Slack, Discord); `plain`: raw text (ntfy) |
+| `metrics_file` | path | Prometheus text file, see [Metrics](#metrics-and-grafana) |
+| `influx_url` | URL | InfluxDB write endpoint |
+| `influx_token_file`, `influx_token_env` | path, name | InfluxDB token |
+| `influx_top_ips` | whole number | Top IPs per zone written to InfluxDB (default 5) |
+| `metrics_kv` | true/false | Workers only: keep metrics in KV for `/metrics` (default true) |
+
+The config is checked strictly before anything runs: an unknown key or section, or a value of the
+wrong type (`exclude_paths = "/adm"` instead of `["/adm"]`, `threshold = true`) stops with exit
+code 2 and says what is wrong, with a suggestion for misspelled keys.
 
 ## Metrics and Grafana
 

@@ -363,6 +363,44 @@ class RatewatchTest(unittest.TestCase):
         finally:
             os.chmod(d, 0o700)
 
+    def test_config_types_and_settings_are_strict(self):
+        zone = '[[zones]]\nname = "x"\n'
+        bad = {
+            "exclude_paths as a string": zone + 'exclude_paths = "/adm"\n',
+            "exclude_paths without slash": zone + 'exclude_paths = ["adm"]\n',
+            "exclude_paths that excludes all": zone + 'exclude_paths = ["/"]\n',
+            "empty extension": zone + 'exclude_extensions = ["."]\n',
+            "exclude_cached as a string": zone + 'exclude_cached = "false"\n',
+            "threshold = true": zone + "threshold = true\n",
+            "top not whole": zone + "top = 2.5\n",
+            "allow as a string": zone + 'allow = "192.0.2.0/24"\n',
+            "allow in defaults as a string": '[defaults]\nallow = "192.0.2.0/24"\n' + zone,
+            "name not a string": "[[zones]]\nname = 5\n",
+            "settings typo": '[settings]\ninflux_ulr = "http://x"\n' + zone,
+            "section typo": '[setting]\nnotify_url = "http://x"\n' + zone,
+            "notify_format": '[settings]\nnotify_format = "xml"\n' + zone,
+            "notify_url not a URL": '[settings]\nnotify_url = "ntfy.sh/topic"\n' + zone,
+            "influx_top_ips negative": "[settings]\ninflux_top_ips = -1\n" + zone,
+            "api_token_file not a string": "[settings]\napi_token_file = 123\n" + zone,
+            "api_token_env empty": '[settings]\napi_token_env = ""\n' + zone,
+            "metrics_kv not bool": '[settings]\nmetrics_kv = "no"\n' + zone,
+            "zones as a table": '[zones]\nname = "x"\n',
+        }
+        for label, text in bad.items():
+            with self.assertRaises(rw.ConfigError, msg=label):
+                rw.load_config(write_config(text))
+        good = ('[settings]\napi_token_env = "T"\napi_token_file = "/etc/t"\ninflux_url = "https://i:8086/write?db=x"\n'
+                'influx_token_env = "I"\ninflux_top_ips = 0\nmetrics_file = "/var/lib/x.prom"\nmetrics_kv = false\n'
+                'notify_url = "https://ntfy.sh/t"\nnotify_format = "plain"\n'
+                '[defaults]\nthreshold = 1500.5\ntop = 20.0\nexclude_paths = ["/adm", "/wp-*"]\n'
+                'exclude_extensions = ["jpg", ".css"]\nexclude_cached = false\n' + zone)
+        conf = rw.load_config(write_config(good))
+        self.assertEqual(conf["zones"][0]["cfg"]["top"], 20.0)
+        with self.assertRaisesRegex(rw.ConfigError, "did you mean 'influx_url'"):
+            rw.load_config(write_config('[settings]\ninflux_ulr = "http://x"\n' + zone))
+        with self.assertRaisesRegex(rw.ConfigError, "did you mean 'threshold'"):
+            rw.load_config(write_config(zone + "treshold = 5\n"))
+
     def test_config_validation(self):
         with self.assertRaises(rw.ConfigError):
             rw.load_config(write_config('[[zones]]\nname = "x"\ntreshold = 5\n'))
