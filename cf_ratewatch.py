@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import difflib
 import ipaddress
 import json
 import logging
@@ -25,7 +26,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 TAG = "cf-ratewatch"
 API = os.environ.get("CF_API_BASE", "https://api.cloudflare.com/client/v4").rstrip("/")
 log = logging.getLogger(TAG)
@@ -47,6 +48,22 @@ ZONE_DEFAULTS = {
 MODES = {"block", "managed_challenge", "challenge", "js_challenge"}
 SCOPES = {"zone", "account"}
 V6_PREFIXES = {32, 48, 64, 128}
+SECTIONS = ("settings", "defaults", "zones")
+SETTINGS = {  # key -> kind; checked in _validate_settings
+    "api_token_env": "name",
+    "api_token_file": "path",
+    "influx_url": "url",
+    "influx_token_env": "name",
+    "influx_token_file": "path",
+    "influx_top_ips": "count",
+    "metrics_file": "path",
+    "metrics_kv": "bool",  # used by the Worker; accepted here so one config fits both
+    "notify_url": "url",
+    "notify_format": ("json", "plain"),
+}
+NUMBER_KEYS = ("threshold", "window_minutes", "ban_hours")
+INTEGER_KEYS = ("max_bans_per_run", "top")
+LIST_KEYS = ("exclude_paths", "exclude_extensions", "allow")
 
 QUERY = """query($zone: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
   viewer { zones(filter: {zoneTag: $zone}) {
@@ -125,18 +142,37 @@ def load_config(path):
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from None
 
+    return config_from_dict(raw)
+
+
+def config_from_dict(raw):
+    """Validate a parsed config (TOML on a server, JSON on Workers) and merge defaults into zones."""
+    if not isinstance(raw, dict):
+        raise ConfigError("the config must be a table")
+    _check_unknown(raw, SECTIONS, "config", "section")
     settings = raw.get("settings", {})
+    _validate_settings(settings)
     defaults = raw.get("defaults", {})
-    _check_keys(defaults, "[defaults]")
+    if not isinstance(defaults, dict):
+        raise ConfigError("[defaults] must be a table")
+    _check_unknown(defaults, ZONE_DEFAULTS, "[defaults]")
+    _check_lists(defaults, "[defaults]")
     base = {**ZONE_DEFAULTS, **defaults}
 
+    raw_zones = raw.get("zones", [])
+    if not isinstance(raw_zones, list) or not all(isinstance(z, dict) for z in raw_zones):
+        raise ConfigError("zones must be an array of tables: [[zones]]")
     zones = []
-    for i, z in enumerate(raw.get("zones", [])):
+    for i, z in enumerate(raw_zones):
         where = f"[[zones]] #{i + 1}"
+        for key in ("name", "id"):
+            if key in z and (not isinstance(z[key], str) or not z[key].strip()):
+                raise ConfigError(f"{where}: {key} must be a non-empty string")
         if not (z.get("name") or z.get("id")):
             raise ConfigError(f"{where}: needs name or id")
         over = {k: v for k, v in z.items() if k not in ("name", "id")}
-        _check_keys(over, where)
+        _check_unknown(over, ZONE_DEFAULTS, where)
+        _check_lists(over, where)
         cfg = {**base, **over}
         cfg["allow"] = list(base["allow"]) + list(over.get("allow", [])) if "allow" in over else list(base["allow"])
         _validate(cfg, z.get("name") or z.get("id"))
@@ -146,24 +182,73 @@ def load_config(path):
     return {"settings": settings, "zones": zones}
 
 
-def _check_keys(d, where):
-    unknown = set(d) - set(ZONE_DEFAULTS)
-    if unknown:
-        raise ConfigError(f"{where}: unknown keys: {', '.join(sorted(unknown))}")
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)  # TOML true is not 1
+
+
+def _is_integer(v):
+    return _is_number(v) and float(v).is_integer()
+
+
+def _check_unknown(d, known, where, what="key"):
+    for key in sorted(set(d) - set(known)):
+        hint = difflib.get_close_matches(key, sorted(known), n=1)
+        raise ConfigError(f"{where}: unknown {what} {key!r}" + (f" (did you mean {hint[0]!r}?)" if hint else ""))
+
+
+def _check_lists(d, where):
+    for key in LIST_KEYS:
+        if key in d and (not isinstance(d[key], list) or not all(isinstance(x, str) for x in d[key])):
+            raise ConfigError(f'{where}: {key} must be a list of strings, e.g. {key} = ["..."]')
+
+
+def _validate_settings(settings):
+    if not isinstance(settings, dict):
+        raise ConfigError("[settings] must be a table")
+    _check_unknown(settings, SETTINGS, "[settings]")
+    for key, value in settings.items():
+        kind, where = SETTINGS[key], f"[settings] {key}"
+        if kind in ("name", "path"):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"{where} must be a non-empty string")
+        elif kind == "url":
+            if not isinstance(value, str) or not re.match(r"^https?://[^/\s]+", value):
+                raise ConfigError(f"{where} must be an http:// or https:// URL")
+        elif kind == "count":
+            if not _is_integer(value) or value < 0:
+                raise ConfigError(f"{where} must be a whole number, 0 or more")
+        elif kind == "bool":
+            if not isinstance(value, bool):
+                raise ConfigError(f"{where} must be true or false")
+        elif not isinstance(value, str) or value not in kind:
+            raise ConfigError(f"{where} must be one of {', '.join(kind)}")
 
 
 def _validate(cfg, label):
-    if cfg["mode"] not in MODES:
+    if not isinstance(cfg["mode"], str) or cfg["mode"] not in MODES:
         raise ConfigError(f"{label}: mode must be one of {sorted(MODES)}")
-    if cfg["scope"] not in SCOPES:
+    if not isinstance(cfg["scope"], str) or cfg["scope"] not in SCOPES:
         raise ConfigError(f"{label}: scope must be zone or account")
-    if cfg["ipv6_prefix"] not in V6_PREFIXES:
+    if not _is_integer(cfg["ipv6_prefix"]) or cfg["ipv6_prefix"] not in V6_PREFIXES:
         raise ConfigError(f"{label}: ipv6_prefix must be one of {sorted(V6_PREFIXES)}")
-    for key in ("threshold", "window_minutes", "ban_hours", "max_bans_per_run", "top"):
-        if not isinstance(cfg[key], (int, float)) or cfg[key] <= 0:
+    for key in NUMBER_KEYS:
+        if not _is_number(cfg[key]) or cfg[key] <= 0:
             raise ConfigError(f"{label}: {key} must be a positive number")
+    for key in INTEGER_KEYS:
+        if not _is_integer(cfg[key]) or cfg[key] <= 0:
+            raise ConfigError(f"{label}: {key} must be a positive whole number")
     if cfg["window_minutes"] > 1440:
         raise ConfigError(f"{label}: window_minutes can be at most 1440")
+    if not isinstance(cfg["exclude_cached"], bool):
+        raise ConfigError(f"{label}: exclude_cached must be true or false")
+    for p in cfg["exclude_paths"]:
+        if not p.startswith("/"):
+            raise ConfigError(f"{label}: exclude_paths entry {p!r} must start with /")
+        if p.rstrip("%*") in ("", "/"):
+            raise ConfigError(f"{label}: exclude_paths entry {p!r} would exclude every request")
+    for e in cfg["exclude_extensions"]:
+        if not e.lstrip(".") or any(c in e for c in "/%* "):
+            raise ConfigError(f"{label}: exclude_extensions entry {e!r} is not a file extension")
     try:
         cfg["_allow"] = [ipaddress.ip_network(a, strict=False) for a in cfg["allow"]]
     except ValueError as e:
