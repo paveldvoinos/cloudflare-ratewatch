@@ -30,6 +30,22 @@ export const ZONE_DEFAULTS = {
 const MODES = new Set(["block", "managed_challenge", "challenge", "js_challenge"]);
 const SCOPES = new Set(["zone", "account"]);
 const V6_PREFIXES = new Set([32, 48, 64, 128]);
+const SECTIONS = ["settings", "defaults", "zones"];
+const SETTINGS = { // key -> kind; same table as SETTINGS in cf_ratewatch.py
+  api_token_env: "name",
+  api_token_file: "path",
+  influx_url: "url",
+  influx_token_env: "name",
+  influx_token_file: "path",
+  influx_top_ips: "count",
+  metrics_file: "path",
+  metrics_kv: "bool",
+  notify_url: "url",
+  notify_format: ["json", "plain"],
+};
+const NUMBER_KEYS = ["threshold", "window_minutes", "ban_hours"];
+const INTEGER_KEYS = ["max_bans_per_run", "top"];
+const LIST_KEYS = ["exclude_paths", "exclude_extensions", "allow"];
 
 const QUERY = (limit) => `query($zone: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
   viewer { zones(filter: {zoneTag: $zone}) {
@@ -163,19 +179,81 @@ export function isAllowed(ip, nets) {
 
 // ------------------------------------------------------------------ config
 
-function checkKeys(obj, where) {
-  const unknown = Object.keys(obj).filter((k) => !(k in ZONE_DEFAULTS)).sort();
-  if (unknown.length) throw new ConfigError(`${where}: unknown keys: ${unknown.join(", ")}`);
+const isTable = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isNumber = (v) => typeof v === "number" && Number.isFinite(v);
+const isInteger = (v) => isNumber(v) && Number.isInteger(v);
+const isText = (v) => typeof v === "string" && v.trim() !== "";
+
+function similarity(a, b) { // 1 - edit distance / length, for "did you mean"
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return 1 - d[a.length][b.length] / Math.max(a.length, b.length, 1);
+}
+
+function checkUnknown(obj, known, where, what = "key") {
+  const names = Array.isArray(known) ? known : Object.keys(known);
+  for (const key of Object.keys(obj).sort()) {
+    if (names.includes(key)) continue;
+    const best = names.map((n) => [similarity(key, n), n]).sort((x, y) => y[0] - x[0])[0];
+    const hint = best && best[0] >= 0.6 ? ` (did you mean '${best[1]}'?)` : "";
+    throw new ConfigError(`${where}: unknown ${what} '${key}'${hint}`);
+  }
+}
+
+function checkLists(obj, where) {
+  for (const key of LIST_KEYS) {
+    if (key in obj && (!Array.isArray(obj[key]) || !obj[key].every((x) => typeof x === "string"))) {
+      throw new ConfigError(`${where}: ${key} must be a list of strings, e.g. "${key}": ["..."]`);
+    }
+  }
+}
+
+function validateSettings(settings) {
+  if (!isTable(settings)) throw new ConfigError("[settings] must be a table");
+  checkUnknown(settings, SETTINGS, "[settings]");
+  for (const [key, value] of Object.entries(settings)) {
+    const kind = SETTINGS[key];
+    const where = `[settings] ${key}`;
+    if (kind === "name" || kind === "path") {
+      if (!isText(value)) throw new ConfigError(`${where} must be a non-empty string`);
+    } else if (kind === "url") {
+      if (typeof value !== "string" || !/^https?:\/\/[^/\s]+/.test(value)) throw new ConfigError(`${where} must be an http:// or https:// URL`);
+    } else if (kind === "count") {
+      if (!isInteger(value) || value < 0) throw new ConfigError(`${where} must be a whole number, 0 or more`);
+    } else if (kind === "bool") {
+      if (typeof value !== "boolean") throw new ConfigError(`${where} must be true or false`);
+    } else if (typeof value !== "string" || !kind.includes(value)) {
+      throw new ConfigError(`${where} must be one of ${kind.join(", ")}`);
+    }
+  }
 }
 
 function validate(cfg, label) {
-  if (!MODES.has(cfg.mode)) throw new ConfigError(`${label}: mode must be one of ${[...MODES].sort()}`);
-  if (!SCOPES.has(cfg.scope)) throw new ConfigError(`${label}: scope must be zone or account`);
-  if (!V6_PREFIXES.has(cfg.ipv6_prefix)) throw new ConfigError(`${label}: ipv6_prefix must be one of 32, 48, 64, 128`);
-  for (const key of ["threshold", "window_minutes", "ban_hours", "max_bans_per_run", "top"]) {
-    if (typeof cfg[key] !== "number" || !(cfg[key] > 0)) throw new ConfigError(`${label}: ${key} must be a positive number`);
+  if (typeof cfg.mode !== "string" || !MODES.has(cfg.mode)) throw new ConfigError(`${label}: mode must be one of ${[...MODES].sort()}`);
+  if (typeof cfg.scope !== "string" || !SCOPES.has(cfg.scope)) throw new ConfigError(`${label}: scope must be zone or account`);
+  if (!isInteger(cfg.ipv6_prefix) || !V6_PREFIXES.has(cfg.ipv6_prefix)) {
+    throw new ConfigError(`${label}: ipv6_prefix must be one of 32, 48, 64, 128`);
+  }
+  for (const key of NUMBER_KEYS) {
+    if (!isNumber(cfg[key]) || !(cfg[key] > 0)) throw new ConfigError(`${label}: ${key} must be a positive number`);
+  }
+  for (const key of INTEGER_KEYS) {
+    if (!isInteger(cfg[key]) || !(cfg[key] > 0)) throw new ConfigError(`${label}: ${key} must be a positive whole number`);
   }
   if (cfg.window_minutes > 1440) throw new ConfigError(`${label}: window_minutes can be at most 1440`);
+  if (typeof cfg.exclude_cached !== "boolean") throw new ConfigError(`${label}: exclude_cached must be true or false`);
+  for (const p of cfg.exclude_paths) {
+    if (!p.startsWith("/")) throw new ConfigError(`${label}: exclude_paths entry '${p}' must start with /`);
+    if (["", "/"].includes(p.replace(/[%*]+$/, ""))) throw new ConfigError(`${label}: exclude_paths entry '${p}' would exclude every request`);
+  }
+  for (const e of cfg.exclude_extensions) {
+    if (!e.replace(/^\.+/, "") || /[/%* ]/.test(e)) throw new ConfigError(`${label}: exclude_extensions entry '${e}' is not a file extension`);
+  }
   cfg._allow = cfg.allow.map((a) => {
     const net = parseNet(a);
     if (!net) throw new ConfigError(`${label}: allow: ${a} is not an IP or CIDR`);
@@ -183,16 +261,28 @@ function validate(cfg, label) {
   });
 }
 
+/** Validate a parsed config (JSON here, TOML on a server) and merge defaults into zones. */
 export function configFromDict(raw) {
-  const settings = raw.settings || {};
-  const defaults = raw.defaults || {};
-  checkKeys(defaults, "[defaults]");
+  if (!isTable(raw)) throw new ConfigError("the config must be a table");
+  checkUnknown(raw, SECTIONS, "config", "section");
+  const settings = "settings" in raw ? raw.settings : {};
+  validateSettings(settings);
+  const defaults = "defaults" in raw ? raw.defaults : {};
+  if (!isTable(defaults)) throw new ConfigError("[defaults] must be a table");
+  checkUnknown(defaults, ZONE_DEFAULTS, "[defaults]");
+  checkLists(defaults, "[defaults]");
   const base = { ...ZONE_DEFAULTS, ...defaults };
-  const zones = (raw.zones || []).map((z, i) => {
+  const rawZones = "zones" in raw ? raw.zones : [];
+  if (!Array.isArray(rawZones) || !rawZones.every(isTable)) throw new ConfigError("zones must be an array of tables: [[zones]]");
+  const zones = rawZones.map((z, i) => {
     const where = `[[zones]] #${i + 1}`;
+    for (const key of ["name", "id"]) {
+      if (key in z && !isText(z[key])) throw new ConfigError(`${where}: ${key} must be a non-empty string`);
+    }
     if (!(z.name || z.id)) throw new ConfigError(`${where}: needs name or id`);
     const over = Object.fromEntries(Object.entries(z).filter(([k]) => k !== "name" && k !== "id"));
-    checkKeys(over, where);
+    checkUnknown(over, ZONE_DEFAULTS, where);
+    checkLists(over, where);
     const cfg = { ...base, ...over };
     cfg.allow = "allow" in over ? [...base.allow, ...over.allow] : [...base.allow];
     validate(cfg, z.name || z.id);
