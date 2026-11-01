@@ -18,8 +18,8 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
@@ -28,8 +28,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: ruff
@@ -40,7 +40,7 @@ jobs:
         run: shellcheck -s sh packaging/build-deb.sh packaging/postinst packaging/prerm packaging/postrm
       - name: actionlint
         run: |
-          pip install --quiet actionlint-py==1.7.12
+          pip install --quiet actionlint-py==1.7.12.25
           actionlint
       - name: systemd units
         run: systemd-analyze verify contrib/cf-ratewatch.service contrib/cf-ratewatch.timer
