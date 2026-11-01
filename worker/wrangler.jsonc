@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-ratewatch",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  // Serves GET /metrics (bearer METRICS_TOKEN) on <name>.<subdomain>.workers.dev.
+  // Set to false if you don't scrape metrics from the Worker.
+  "workers_dev": true,
+  "triggers": {
+    // Every 10 minutes. Keep it at 2 minutes or slower: each run writes the metrics to KV,
+    // and Workers KV Free allows 1,000 writes a day.
+    "crons": ["*/10 * * * *"]
+  },
+  // Zone id cache and the latest metrics. Created automatically on the first deploy.
+  "kv_namespaces": [{ "binding": "STATE" }],
+  "observability": { "enabled": true },
+  "vars": {
+    // Start with "true": the Worker logs what it would ban and changes nothing.
+    // Check the logs (wrangler tail, or Workers Logs in the dashboard), then set "false".
+    "DRY_RUN": "true",
+    // Same schema as config.example.toml in the repository, as JSON.
+    "CONFIG": {
+      "defaults": {
+        "window_minutes": 60,
+        "threshold": 1000,
+        "ban_hours": 24,
+        "mode": "block",
+        "scope": "zone"
+      },
+      "zones": [
+        { "name": "example.com", "exclude_paths": ["/admin"] }
+      ]
+    }
+  }
+}

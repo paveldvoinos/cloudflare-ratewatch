@@ -1,0 +1,32 @@
+{
+  "name": "cf-ratewatch-worker",
+  "version": "0.3.0",
+  "private": true,
+  "description": "cf-ratewatch on Cloudflare Workers: hour-scale per-IP limits for Cloudflare zones",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.156.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "CF_API_TOKEN": {
+        "description": "Cloudflare API token with Zone:Read, Analytics:Read and Firewall Services:Edit on the zones you protect (plus Account Firewall Access Rules:Edit for scope = \"account\")."
+      },
+      "METRICS_TOKEN": {
+        "description": "Optional. A random string, e.g. `openssl rand -hex 32`. Prometheus scrapes GET /metrics with it as a bearer token. Leave empty to keep /metrics off."
+      },
+      "DRY_RUN": {
+        "description": "\"true\" logs what would be banned and changes nothing. Set to \"false\" once the logs look right."
+      },
+      "CONFIG": {
+        "description": "Zones and thresholds, as JSON. Same schema as config.example.toml in the repository."
+      }
+    }
+  }
+}
