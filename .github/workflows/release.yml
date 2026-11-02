@@ -17,13 +17,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Tag matches __version__
+      - name: Tag matches the version everywhere
         run: |
           v="${GITHUB_REF_NAME#v}"
-          if ! grep -qx "__version__ = \"$v\"" cf_ratewatch.py; then
-            echo "::error::tag $GITHUB_REF_NAME does not match __version__ in cf_ratewatch.py"
-            exit 1
-          fi
+          ok=1
+          grep -qx "__version__ = \"$v\"" cf_ratewatch.py || { echo "::error::cf_ratewatch.py __version__ != $v"; ok=0; }
+          grep -qx "export const VERSION = \"$v\";" worker/src/core.js || { echo "::error::worker/src/core.js VERSION != $v"; ok=0; }
+          [ "$(jq -r .version worker/package.json)" = "$v" ] || { echo "::error::worker/package.json version != $v"; ok=0; }
+          [ "$ok" = 1 ]
       - name: Build
         run: packaging/build-deb.sh "$GITHUB_REF_NAME"
       - name: Lintian

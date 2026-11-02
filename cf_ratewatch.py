@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 TAG = "cf-ratewatch"
 API = os.environ.get("CF_API_BASE", "https://api.cloudflare.com/client/v4").rstrip("/")
 log = logging.getLogger(TAG)
@@ -142,8 +142,8 @@ def load_config(path):
         raise ConfigError(f"cannot read {path}: {e.strerror}") from None
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from None
-
     return config_from_dict(raw)
+
 
 
 def config_from_dict(raw):
@@ -433,14 +433,10 @@ def _prom_labels(labels):
     return "{" + ",".join(f'{k}="{esc(v)}"' for k, v in sorted(labels.items())) + "}"
 
 
-def _prom_counters(path):
-    """Previous *_total values, so counters keep growing across oneshot runs."""
+def parse_prom_counters(text):
+    """*_total values from a previous metrics file, so counters keep growing across oneshot runs."""
     out = {}
-    try:
-        text = Path(path).read_text()
-    except FileNotFoundError:
-        return out
-    for line in text.splitlines():
+    for line in (text or "").splitlines():
         m = PROM_SAMPLE.match(line)
         if m and m.group(1).endswith("_total"):
             labels = tuple(sorted(PROM_LABEL.findall(m.group(2) or "")))
@@ -451,8 +447,8 @@ def _prom_counters(path):
     return out
 
 
-def write_prom(path, stats, now, duration):
-    prev = _prom_counters(path)
+def prom_text(stats, now, duration, prev_text=""):
+    prev = parse_prom_counters(prev_text)
     zones = stats["zones"]
     lines = []
 
@@ -488,8 +484,16 @@ def write_prom(path, stats, now, duration):
     metric("cf_ratewatch_run_duration_seconds", "Duration of the last run.", "gauge",
            [({}, round(duration, 3))])
 
+    return "\n".join(lines) + "\n"
+
+
+def write_prom(path, stats, now, duration):
+    try:
+        prev = Path(path).read_text()
+    except FileNotFoundError:
+        prev = ""
     tmp = f"{path}.tmp"
-    Path(tmp).write_text("\n".join(lines) + "\n")
+    Path(tmp).write_text(prom_text(stats, now, duration, prev))
     os.replace(tmp, path)  # atomic: node_exporter never reads a half-written file
 
 

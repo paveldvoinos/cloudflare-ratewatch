@@ -1,0 +1,5 @@
+# Cloudflare API token: Zone Read, Analytics Read, Firewall Services Edit
+# (+ Account Firewall Access Rules Edit if you use scope = "account")
+CF_API_TOKEN=
+# Optional: bearer token for GET /metrics. Empty keeps the endpoint off.
+METRICS_TOKEN=

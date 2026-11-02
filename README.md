@@ -12,8 +12,13 @@ visitor could live with.
 
 cf-ratewatch counts requests per client IP over a longer window (default: 60 minutes) using the
 GraphQL Analytics API, and blocks IPs over a threshold with **IP Access Rules**. The rules
-expire on their own after a ban period. It is a single Python file with no dependencies, run from
-cron or a systemd timer.
+expire on their own after a ban period. Run it either way:
+
+- **on your server**: a single Python file with no dependencies, from a systemd timer or cron
+  (a `.deb` is attached to every release);
+- **on Cloudflare Workers**: a Cron Trigger on the Workers Free plan, no server at all.
+
+Both use the same configuration schema and the same rule notes, so you can move between them.
 
 ### Real example
 
@@ -50,7 +55,8 @@ IP caught scanning one site is blocked on all of them.
 
 ## Install
 
-Requires Python 3.11+ (Debian 12, Ubuntu 24.04, Proxmox VE 8 and newer).
+The server version needs Python 3.11+ (Debian 12, Ubuntu 24.04, Proxmox VE 8 and newer); the
+Worker needs only a Cloudflare account.
 
 ### Debian / Ubuntu package
 
@@ -70,6 +76,40 @@ The package installs `/usr/bin/cf-ratewatch`, the systemd service and timer, a `
 system user, and `/etc/cf-ratewatch/config.toml` as a conffile, so your edits survive upgrades.
 It does not enable the timer by itself. `apt purge` removes the config and the token; bans already
 in Cloudflare stay until they expire (or `cf-ratewatch unban` them first).
+
+### Cloudflare Workers
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/paveldvoinos/cloudflare-ratewatch/tree/main/worker)
+
+The button copies [`worker/`](worker) into a repository of yours, creates the KV namespace and
+asks for the secrets. Or deploy by hand:
+
+```sh
+cd worker
+npm install
+$EDITOR wrangler.jsonc                         # CONFIG: zones and thresholds (JSON, same schema as config.example.toml)
+npx wrangler secret put CF_API_TOKEN           # same token permissions as below
+npx wrangler secret put METRICS_TOKEN          # optional, enables GET /metrics
+npx wrangler deploy
+npx wrangler tail                              # watch a run (every 10 minutes)
+```
+
+The Worker starts with `DRY_RUN = "true"`: it logs the top IPs and what it would ban, and changes
+nothing. When the logs look right, set `DRY_RUN` to `"false"` and deploy again.
+
+It fits the Workers Free plan:
+
+- **CPU**: a run is network waits plus a few small JSON documents, far below the 10 ms limit.
+- **Subrequests** (50 per run on Free): one analytics query per zone, one rule listing per scope,
+  one call per ban or lifted ban. Zone ids are cached in KV for a day. `scope = "account"` needs a
+  single rule listing for all zones, so a few dozen zones fit. A run stops cleanly at 45 API calls
+  (`MAX_SUBREQUESTS`) and picks up on the next run.
+- **KV**: one write per run for the metrics. Keep the cron at every 2 minutes or slower (Free allows
+  1,000 writes a day), or set `"metrics_kv": false` under `settings`.
+
+Differences from the Python version: the configuration is the `CONFIG` variable (JSON) instead of
+TOML, the token is the `CF_API_TOKEN` secret, and `metrics_file` is replaced by the `/metrics`
+endpoint below. Run one of the two at a time; bans created by either are lifted by the other.
 
 ### From source
 
@@ -189,6 +229,19 @@ across runs and `increase()` works.
 
 IPs are never used as labels. A useful alert: `time() - cf_ratewatch_last_run_timestamp_seconds > 1800`.
 
+On Cloudflare Workers the same metrics are served at `GET /metrics` on the Worker's `workers.dev`
+address, protected by the `METRICS_TOKEN` secret (the endpoint is off without it):
+
+```yaml
+scrape_configs:
+  - job_name: cf-ratewatch
+    scheme: https
+    authorization:
+      credentials: <METRICS_TOKEN>
+    static_configs:
+      - targets: ["cf-ratewatch.<your-subdomain>.workers.dev"]
+```
+
 ### InfluxDB
 
 ```toml
@@ -207,6 +260,11 @@ One point per measurement per run, timestamped at the run:
 | `cf_ratewatch_run` | | `active_bans`, `lifted`, `errors`, `duration` |
 
 IPs are fields, not tags, so they don't grow series cardinality.
+
+On Cloudflare Workers, set `influx_url` in `CONFIG` and the token as the `INFLUX_TOKEN` secret.
+InfluxDB has to be reachable from the internet; if it sits behind Cloudflare Access (for example
+through a Tunnel), add an Access service token as the `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` secrets.
 
 ### Dashboards
 
@@ -249,12 +307,20 @@ Config path: `-c`, else `$CF_RATEWATCH_CONFIG`, else `/etc/cf-ratewatch/config.t
 python3 -m unittest discover -s tests        # fake Cloudflare API on localhost, no token or network
 ruff check .
 packaging/build-deb.sh                       # dist/cf-ratewatch_<version>_all.deb
+cd worker && npm test                        # Worker, same fake-API scenarios
+cd worker && npm run dev                     # local workerd; trigger a run: curl "localhost:8787/__scheduled"
 ```
 
-CI runs the tests (Python 3.11–3.13) and the linters (ruff, shellcheck, actionlint,
-`systemd-analyze verify`) on every push and pull request.
+The two implementations share [`tests/vectors.json`](tests/vectors.json): analytics filters, rule
+targets, IP normalisation, config merging and validation, InfluxDB lines and Prometheus text, which
+both test suites check. After an intentional change, regenerate it with
+`python3 tests/make_vectors.py` and review the diff.
 
-To release, set `__version__` in `cf_ratewatch.py`, commit, and push a matching tag:
+CI runs the Python tests (3.11–3.13), the Worker tests and a `wrangler deploy --dry-run`, and the
+linters (ruff, shellcheck, actionlint, `systemd-analyze verify`) on every push and pull request.
+
+To release, set the version in `cf_ratewatch.py`, `worker/src/core.js` and `worker/package.json`,
+commit, and push a matching tag:
 
 ```sh
 git tag v0.3.0 && git push origin v0.3.0      # v0.3.0-rc1 makes a pre-release

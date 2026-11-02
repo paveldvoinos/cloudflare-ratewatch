@@ -1,0 +1,949 @@
+{
+ "now": "2026-10-30T18:00:00Z",
+ "filter": [
+  {
+   "cfg": {},
+   "expect": {
+    "datetime_geq": "2026-10-30T17:00:00Z",
+    "datetime_lt": "2026-10-30T18:00:00Z",
+    "AND": [
+     {
+      "cacheStatus_neq": "hit"
+     }
+    ]
+   }
+  },
+  {
+   "cfg": {
+    "exclude_cached": false
+   },
+   "expect": {
+    "datetime_geq": "2026-10-30T17:00:00Z",
+    "datetime_lt": "2026-10-30T18:00:00Z"
+   }
+  },
+  {
+   "cfg": {
+    "window_minutes": 15,
+    "exclude_paths": [
+     "/adm",
+     "/admin%",
+     "/wp-*"
+    ],
+    "exclude_extensions": [
+     "jpg",
+     ".css"
+    ]
+   },
+   "expect": {
+    "datetime_geq": "2026-10-30T17:45:00Z",
+    "datetime_lt": "2026-10-30T18:00:00Z",
+    "AND": [
+     {
+      "cacheStatus_neq": "hit"
+     },
+     {
+      "clientRequestPath_notlike": "/adm%"
+     },
+     {
+      "clientRequestPath_notlike": "/admin%"
+     },
+     {
+      "clientRequestPath_notlike": "/wp-%"
+     },
+     {
+      "clientRequestPath_notlike": "%.jpg"
+     },
+     {
+      "clientRequestPath_notlike": "%.css"
+     }
+    ]
+   }
+  }
+ ],
+ "rule_target": [
+  {
+   "ip": "203.0.113.9",
+   "prefix": 64,
+   "expect": [
+    "ip",
+    "203.0.113.9"
+   ]
+  },
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 64,
+   "expect": [
+    "ip_range",
+    "2001:db8:1:2::/64"
+   ]
+  },
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 48,
+   "expect": [
+    "ip_range",
+    "2001:db8:1::/48"
+   ]
+  },
+  {
+   "ip": "2001:db8:1:2:3:4:5:6",
+   "prefix": 32,
+   "expect": [
+    "ip_range",
+    "2001:db8::/32"
+   ]
+  },
+  {
+   "ip": "2001:0db8:0000:0000:0001:0000:0000:0001",
+   "prefix": 128,
+   "expect": [
+    "ip6",
+    "2001:db8::1:0:0:1"
+   ]
+  },
+  {
+   "ip": "2a01:4f9:c010:d5f9::1",
+   "prefix": 64,
+   "expect": [
+    "ip_range",
+    "2a01:4f9:c010:d5f9::/64"
+   ]
+  },
+  {
+   "ip": "::ffff:198.51.100.7",
+   "prefix": 64,
+   "expect": [
+    "ip_range",
+    "::/64"
+   ]
+  },
+  {
+   "ip": "fe80::1",
+   "prefix": 128,
+   "expect": [
+    "ip6",
+    "fe80::1"
+   ]
+  }
+ ],
+ "norm": [
+  {
+   "value": "2001:0db8:0000:0000:0000:0000:0000:0000/64",
+   "expect": "2001:db8::/64"
+  },
+  {
+   "value": "2001:db8::/64",
+   "expect": "2001:db8::/64"
+  },
+  {
+   "value": "192.0.2.1",
+   "expect": "192.0.2.1/32"
+  },
+  {
+   "value": "192.0.2.0/24",
+   "expect": "192.0.2.0/24"
+  },
+  {
+   "value": "2001:db8::1",
+   "expect": "2001:db8::1/128"
+  },
+  {
+   "value": "2a01:04f9:c010:d5f9:0000:0000:0000:0000/64",
+   "expect": "2a01:4f9:c010:d5f9::/64"
+  },
+  {
+   "value": "not-an-ip",
+   "expect": "not-an-ip"
+  }
+ ],
+ "allowed": [
+  {
+   "ip": "192.0.2.7",
+   "allow": [
+    "192.0.2.0/24"
+   ],
+   "expect": true
+  },
+  {
+   "ip": "192.0.3.7",
+   "allow": [
+    "192.0.2.0/24"
+   ],
+   "expect": false
+  },
+  {
+   "ip": "203.0.113.9",
+   "allow": [
+    "203.0.113.9"
+   ],
+   "expect": true
+  },
+  {
+   "ip": "2001:db8:1:2::99",
+   "allow": [
+    "2001:db8:1::/48"
+   ],
+   "expect": true
+  },
+  {
+   "ip": "2001:db8:2::1",
+   "allow": [
+    "2001:db8:1::/48",
+    "10.0.0.0/8"
+   ],
+   "expect": false
+  },
+  {
+   "ip": "10.1.2.3",
+   "allow": [
+    "2001:db8::/32",
+    "10.0.0.0/8"
+   ],
+   "expect": true
+  },
+  {
+   "ip": "192.0.2.1",
+   "allow": [],
+   "expect": false
+  }
+ ],
+ "notes": {
+  "make": {
+   "until": "2026-10-31T18:00:00Z",
+   "zone": "example.com",
+   "hits": 8132,
+   "window": 60,
+   "expect": "cf-ratewatch until=2026-10-31T18:00:00Z zone=example.com hits=8132/60m"
+  },
+  "until": [
+   {
+    "note": "cf-ratewatch until=2026-10-31T18:00:00Z zone=example.com hits=8132/60m",
+    "expect": "2026-10-31T18:00:00Z"
+   },
+   {
+    "note": "cf-ratewatch until=bogus zone=x",
+    "expect": null
+   },
+   {
+    "note": "manual rule",
+    "expect": null
+   },
+   {
+    "note": "",
+    "expect": null
+   },
+   {
+    "note": "cf-ratewatch zone=x until=2026-01-02T03:04:05Z",
+    "expect": "2026-01-02T03:04:05Z"
+   }
+  ]
+ },
+ "config": [
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": true,
+   "zones": [
+    {
+     "name": "a.com",
+     "id": null,
+     "cfg": {
+      "window_minutes": 60,
+      "threshold": 1000,
+      "ban_hours": 24,
+      "mode": "block",
+      "scope": "zone",
+      "exclude_cached": true,
+      "exclude_paths": [],
+      "exclude_extensions": [],
+      "allow": [],
+      "ipv6_prefix": 64,
+      "max_bans_per_run": 20,
+      "top": 25
+     }
+    }
+   ]
+  },
+  {
+   "raw": {
+    "defaults": {
+     "threshold": 500,
+     "allow": [
+      "192.0.2.0/24"
+     ]
+    },
+    "zones": [
+     {
+      "name": "a.com",
+      "allow": [
+       "203.0.113.10"
+      ],
+      "exclude_paths": [
+       "/adm"
+      ]
+     },
+     {
+      "id": "abc",
+      "threshold": 1500.0
+     }
+    ]
+   },
+   "ok": true,
+   "zones": [
+    {
+     "name": "a.com",
+     "id": null,
+     "cfg": {
+      "window_minutes": 60,
+      "threshold": 500,
+      "ban_hours": 24,
+      "mode": "block",
+      "scope": "zone",
+      "exclude_cached": true,
+      "exclude_paths": [
+       "/adm"
+      ],
+      "exclude_extensions": [],
+      "allow": [
+       "192.0.2.0/24",
+       "203.0.113.10"
+      ],
+      "ipv6_prefix": 64,
+      "max_bans_per_run": 20,
+      "top": 25
+     }
+    },
+    {
+     "name": null,
+     "id": "abc",
+     "cfg": {
+      "window_minutes": 60,
+      "threshold": 1500.0,
+      "ban_hours": 24,
+      "mode": "block",
+      "scope": "zone",
+      "exclude_cached": true,
+      "exclude_paths": [],
+      "exclude_extensions": [],
+      "allow": [
+       "192.0.2.0/24"
+      ],
+      "ipv6_prefix": 64,
+      "max_bans_per_run": 20,
+      "top": 25
+     }
+    }
+   ]
+  },
+  {
+   "raw": {
+    "zones": []
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "threshold": 5
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "treshold": 5
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "defaults": {
+     "mode": "nuke"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "scope": "galaxy"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "ipv6_prefix": 56
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "threshold": 0
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "window_minutes": 2000
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "allow": [
+       "not-a-cidr"
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_paths": "/adm"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_paths": [
+       "adm"
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_paths": [
+       "/"
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_paths": [
+       "/%"
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_extensions": [
+       "."
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_extensions": [
+       "a/b"
+      ]
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "exclude_cached": "false"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "threshold": true
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "top": 2.5
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": "a.com",
+      "allow": "192.0.2.0/24"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "defaults": {
+     "allow": "192.0.2.0/24"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": [
+     {
+      "name": 5
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "zones": {
+     "name": "a.com"
+    }
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": null,
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "defaults": [],
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "setting": {},
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "influx_ulr": "http://x"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "notify_format": "xml"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "notify_url": "ntfy.sh/topic"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "influx_top_ips": -1
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "influx_top_ips": 2.5
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "api_token_file": 123
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "api_token_env": ""
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "metrics_kv": "no"
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": false
+  },
+  {
+   "raw": {
+    "settings": {
+     "api_token_env": "T",
+     "api_token_file": "/etc/t",
+     "influx_url": "https://i:8086/write?db=x",
+     "influx_token_env": "I",
+     "influx_token_file": "/t",
+     "influx_top_ips": 0,
+     "metrics_file": "/var/lib/x.prom",
+     "metrics_kv": false,
+     "notify_url": "https://ntfy.sh/t",
+     "notify_format": "plain"
+    },
+    "defaults": {
+     "threshold": 1500.5,
+     "top": 20.0,
+     "exclude_paths": [
+      "/adm",
+      "/wp-*"
+     ],
+     "exclude_extensions": [
+      "jpg",
+      ".css"
+     ],
+     "exclude_cached": false
+    },
+    "zones": [
+     {
+      "name": "a.com"
+     }
+    ]
+   },
+   "ok": true,
+   "zones": [
+    {
+     "name": "a.com",
+     "id": null,
+     "cfg": {
+      "window_minutes": 60,
+      "threshold": 1500.5,
+      "ban_hours": 24,
+      "mode": "block",
+      "scope": "zone",
+      "exclude_cached": false,
+      "exclude_paths": [
+       "/adm",
+       "/wp-*"
+      ],
+      "exclude_extensions": [
+       "jpg",
+       ".css"
+      ],
+      "allow": [],
+      "ipv6_prefix": 64,
+      "max_bans_per_run": 20,
+      "top": 20.0
+     }
+    }
+   ]
+  }
+ ],
+ "influx": {
+  "stats": {
+   "zones": {
+    "example.com": {
+     "ok": 1,
+     "threshold": 1000,
+     "top": 8132,
+     "over": 2,
+     "bans": 2
+    },
+    "down.org": {
+     "ok": 0,
+     "threshold": 1500.0,
+     "top": 0,
+     "over": 0,
+     "bans": 0
+    },
+    "a b,c=d": {
+     "ok": 1,
+     "threshold": 10,
+     "top": 3,
+     "over": 0,
+     "bans": 0
+    }
+   },
+   "top": {
+    "example.com": [
+     [
+      "178.20.210.133",
+      8132
+     ],
+     [
+      "136.23.84.96",
+      1378
+     ],
+     [
+      "66.249.67.64",
+      8
+     ]
+    ],
+    "a b,c=d": [
+     [
+      "2001:db8::1",
+      3
+     ]
+    ]
+   },
+   "bans": [
+    {
+     "zone": "example.com",
+     "mode": "block",
+     "value": "178.20.210.133",
+     "hits": 8132,
+     "until": "2026-10-31T18:00:00Z"
+    },
+    {
+     "zone": "example.com",
+     "mode": "managed_challenge",
+     "value": "odd\"value\\x",
+     "hits": 1378,
+     "until": "2026-10-31T18:00:00Z"
+    }
+   ],
+   "lifted": 3,
+   "errors": 1,
+   "active": {
+    "zone:example.com": 5,
+    "account:A1": 0
+   }
+  },
+  "duration": 1.5,
+  "top_n": 2,
+  "expect": [
+   "cf_ratewatch_zone,zone=example.com query_ok=true,threshold=1000i,top_requests=8132i,over_threshold=2i,bans=2i 1793383200",
+   "cf_ratewatch_zone,zone=down.org query_ok=false,threshold=1500i 1793383200",
+   "cf_ratewatch_zone,zone=a\\ b\\,c\\=d query_ok=true,threshold=10i,top_requests=3i,over_threshold=0i,bans=0i 1793383200",
+   "cf_ratewatch_top,zone=example.com,rank=1 ip=\"178.20.210.133\",requests=8132i 1793383200",
+   "cf_ratewatch_top,zone=example.com,rank=2 ip=\"136.23.84.96\",requests=1378i 1793383200",
+   "cf_ratewatch_top,zone=a\\ b\\,c\\=d,rank=1 ip=\"2001:db8::1\",requests=3i 1793383200",
+   "cf_ratewatch_ban,zone=example.com,mode=block,seq=1 ip=\"178.20.210.133\",hits=8132i,until=\"2026-10-31T18:00:00Z\" 1793383200",
+   "cf_ratewatch_ban,zone=example.com,mode=managed_challenge,seq=2 ip=\"odd\\\"value\\\\x\",hits=1378i,until=\"2026-10-31T18:00:00Z\" 1793383200",
+   "cf_ratewatch_run active_bans=5i,lifted=3i,errors=1i,duration=1.500 1793383200"
+  ]
+ },
+ "prom": {
+  "stats": {
+   "zones": {
+    "example.com": {
+     "ok": 1,
+     "threshold": 1000,
+     "top": 8132,
+     "over": 2,
+     "bans": 2
+    },
+    "down.org": {
+     "ok": 0,
+     "threshold": 1500.0,
+     "top": 0,
+     "over": 0,
+     "bans": 0
+    },
+    "a b,c=d": {
+     "ok": 1,
+     "threshold": 10,
+     "top": 3,
+     "over": 0,
+     "bans": 0
+    }
+   },
+   "top": {
+    "example.com": [
+     [
+      "178.20.210.133",
+      8132
+     ],
+     [
+      "136.23.84.96",
+      1378
+     ],
+     [
+      "66.249.67.64",
+      8
+     ]
+    ],
+    "a b,c=d": [
+     [
+      "2001:db8::1",
+      3
+     ]
+    ]
+   },
+   "bans": [
+    {
+     "zone": "example.com",
+     "mode": "block",
+     "value": "178.20.210.133",
+     "hits": 8132,
+     "until": "2026-10-31T18:00:00Z"
+    },
+    {
+     "zone": "example.com",
+     "mode": "managed_challenge",
+     "value": "odd\"value\\x",
+     "hits": 1378,
+     "until": "2026-10-31T18:00:00Z"
+    }
+   ],
+   "lifted": 3,
+   "errors": 1,
+   "active": {
+    "zone:example.com": 5,
+    "account:A1": 0
+   }
+  },
+  "duration": 1.2345,
+  "prev": "# TYPE cf_ratewatch_bans_total counter\ncf_ratewatch_bans_total{zone=\"example.com\"} 40\ncf_ratewatch_bans_lifted_total 7\ncf_ratewatch_errors_total 2.0\ncf_ratewatch_top_requests{zone=\"example.com\"} 99\n",
+  "expect": "# HELP cf_ratewatch_top_requests Highest request count from a single IP in the window.\n# TYPE cf_ratewatch_top_requests gauge\ncf_ratewatch_top_requests{zone=\"example.com\"} 8132\ncf_ratewatch_top_requests{zone=\"a b,c=d\"} 3\n# HELP cf_ratewatch_threshold Configured ban threshold per window.\n# TYPE cf_ratewatch_threshold gauge\ncf_ratewatch_threshold{zone=\"example.com\"} 1000\ncf_ratewatch_threshold{zone=\"down.org\"} 1500\ncf_ratewatch_threshold{zone=\"a b,c=d\"} 10\n# HELP cf_ratewatch_ips_over_threshold IPs at or over the threshold in this run.\n# TYPE cf_ratewatch_ips_over_threshold gauge\ncf_ratewatch_ips_over_threshold{zone=\"example.com\"} 2\ncf_ratewatch_ips_over_threshold{zone=\"a b,c=d\"} 0\n# HELP cf_ratewatch_zone_query_success 1 if the analytics query for the zone succeeded.\n# TYPE cf_ratewatch_zone_query_success gauge\ncf_ratewatch_zone_query_success{zone=\"example.com\"} 1\ncf_ratewatch_zone_query_success{zone=\"down.org\"} 0\ncf_ratewatch_zone_query_success{zone=\"a b,c=d\"} 1\n# HELP cf_ratewatch_active_bans IP Access Rules currently managed by cf-ratewatch.\n# TYPE cf_ratewatch_active_bans gauge\ncf_ratewatch_active_bans{scope=\"account:A1\"} 0\ncf_ratewatch_active_bans{scope=\"zone:example.com\"} 5\n# HELP cf_ratewatch_bans_total Bans created.\n# TYPE cf_ratewatch_bans_total counter\ncf_ratewatch_bans_total{zone=\"example.com\"} 42\ncf_ratewatch_bans_total{zone=\"down.org\"} 0\ncf_ratewatch_bans_total{zone=\"a b,c=d\"} 0\n# HELP cf_ratewatch_bans_lifted_total Expired bans lifted.\n# TYPE cf_ratewatch_bans_lifted_total counter\ncf_ratewatch_bans_lifted_total 10\n# HELP cf_ratewatch_errors_total API errors.\n# TYPE cf_ratewatch_errors_total counter\ncf_ratewatch_errors_total 3\n# HELP cf_ratewatch_run_success 1 if the last run had no errors.\n# TYPE cf_ratewatch_run_success gauge\ncf_ratewatch_run_success 0\n# HELP cf_ratewatch_last_run_timestamp_seconds Unix time of the last run.\n# TYPE cf_ratewatch_last_run_timestamp_seconds gauge\ncf_ratewatch_last_run_timestamp_seconds 1793383200\n# HELP cf_ratewatch_run_duration_seconds Duration of the last run.\n# TYPE cf_ratewatch_run_duration_seconds gauge\ncf_ratewatch_run_duration_seconds 1.234\n"
+ }
+}
